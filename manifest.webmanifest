@@ -1,0 +1,39 @@
+{
+ "name": "DirhamWise \u2014 Personal Finance",
+ "short_name": "DirhamWise",
+ "description": "Budget, cards, loans, goals and investments, built for the UAE",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "orientation": "portrait",
+ "background_color": "#0A0E17",
+ "theme_color": "#0A0E17",
+ "icons": [
+  {
+   "src": "icons/icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png"
+  },
+  {
+   "src": "icons/icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png"
+  },
+  {
+   "src": "icons/maskable-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
+  }
+ ],
+ "shortcuts": [
+  {
+   "name": "Add transaction",
+   "url": "./#money"
+  },
+  {
+   "name": "Reminders",
+   "url": "./#alerts"
+  }
+ ]
+}
