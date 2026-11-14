@@ -159,7 +159,7 @@ function emptyState() {
   return {
     v: 1,
     settings: { cycleDay:1, currency:'AED', symbol:'AED', rates:{...DEFAULT_RATES}, theme:'auto', hijri:true, islamicEvents:true, remindDays:5, salaryDay:28, name:'' },
-    accounts: [], cards: [], loans: [], goals: [], assets: [], budgets: {}, bills: [], tx: []
+    accounts: [], cards: [], loans: [], goals: [], assets: [], budgets: {}, bills: [], subs: [], tx: []
   };
 }
 
@@ -214,6 +214,72 @@ function generateRecurring(S) {
   }
   return created;
 }
+
+/* ---- Subscriptions ---- */
+const SUB_PRESETS = [
+  ['Netflix','🎬','Subscriptions','monthly'],['Amazon Prime','📦','Subscriptions','monthly'],['noon One','🟡','Subscriptions','monthly'],['Careem Plus','🟢','Subscriptions','monthly'],
+  ['Talabat Pro','🍔','Subscriptions','monthly'],['Deliveroo Plus','🛵','Subscriptions','monthly'],['Spotify','🎵','Subscriptions','monthly'],['Anghami','🎧','Subscriptions','monthly'],
+  ['YouTube Premium','▶️','Subscriptions','monthly'],['Apple iCloud+ / One','🍎','Subscriptions','monthly'],['Google One','☁️','Subscriptions','monthly'],['Shahid VIP','📺','Subscriptions','monthly'],
+  ['OSN+','📺','Subscriptions','monthly'],['Disney+','✨','Subscriptions','monthly'],['ChatGPT Plus','🤖','Subscriptions','monthly'],['Claude Pro','🧠','Subscriptions','monthly'],
+  ['Microsoft 365','🗂️','Subscriptions','yearly'],['LinkedIn Premium','💼','Subscriptions','monthly'],['Gym membership','🏋️','Healthcare','monthly'],['Mobile plan (du / e&)','📶','Internet & Mobile','monthly'],
+  ['Home internet','🌐','Internet & Mobile','monthly'],['Car insurance','🚗','Transportation','yearly'],['Other','🔁','Subscriptions','monthly']
+];
+const SUB_STEP = { weekly: 0, monthly: 1, quarterly: 3, yearly: 12 };
+function subAdvance(d, cycle) { return cycle === 'weekly' ? addDays(d, 7) : addMonths(d, SUB_STEP[cycle] || 1); }
+function subAED(S, sub) { return r2((+sub.amount || 0) * rateOf(S, sub.currency || 'AED')); }
+function subMonthly(S, sub) { const a = subAED(S, sub); return sub.cycle === 'weekly' ? a * 52 / 12 : sub.cycle === 'yearly' ? a / 12 : sub.cycle === 'quarterly' ? a / 3 : a; }
+const subActive = sub => (sub.status || 'active') === 'active';
+// On or after each charge date: auto-record an expense (if enabled) and roll the next date forward.
+function generateSubs(S) {
+  const today = todayISO(); let n = 0;
+  for (const sub of S.subs || []) {
+    if (!subActive(sub) || !sub.next) continue;
+    let guard = 0;
+    while (sub.next <= today && guard++ < 400) {
+      if (sub.trialEnd && sub.next <= sub.trialEnd) { sub.next = addDays(sub.trialEnd, 1); continue; }
+      if (sub.auto === false) break; // manual: stays due until marked paid
+      const t = { id: uid(), created: Date.now() + n, type:'expense', date: sub.next, amount: subAED(S, sub), category: sub.category || 'Subscriptions', payee: sub.name, method: sub.cardId ? 'Credit card' : 'Direct debit', subId: sub.id, auto: true };
+      if (sub.cardId) t.cardId = sub.cardId; else t.accountId = sub.accountId;
+      S.tx.push(t); n++; sub.last = sub.next; sub.next = subAdvance(sub.next, sub.cycle);
+    }
+  }
+  return n;
+}
+function chargesBetween(sub, from, to) { // dates of charges in [from, to]
+  const out = []; if (!subActive(sub) || !sub.next) return out; let d = sub.next, g = 0;
+  while (d <= to && g++ < 200) { if (d >= from && !(sub.trialEnd && d <= sub.trialEnd)) out.push(d); d = subAdvance(d, sub.cycle); }
+  return out;
+}
+function subWarnings(S, L, days = 30) {
+  const today = todayISO(), end = addDays(today, days), out = [];
+  const active = (S.subs || []).filter(subActive);
+  const payer = sub => sub.cardId ? (S.cards.find(c => c.id === sub.cardId)) : null;
+  for (const c of S.cards) {
+    const mine = active.filter(s => s.cardId === c.id); if (!mine.length) continue;
+    const ci = cardInfo(S, L, c);
+    const upcoming = sum(mine.flatMap(s => chargesBetween(s, today, end).map(() => subAED(S, s))));
+    if (upcoming > 0 && upcoming > ci.available) out.push({ level:'bad', cardId:c.id, text:`${c.bank} ${c.name}: ${fmtPlain(upcoming)} of subscriptions due in ${days} days but only ${fmtPlain(Math.max(0, ci.available))} credit is available. Charges may be declined.` });
+    else if (upcoming > 0 && ci.limit && (Math.max(0, ci.bal) + upcoming) / ci.limit > 0.9) out.push({ level:'warn', cardId:c.id, text:`${c.bank} ${c.name}: upcoming subscriptions will push the card above 90% of its limit.` });
+    if (c.expiry) { const expEnd = dateOn(c.expiry, 31);
+      const hit = mine.filter(s => chargesBetween(s, addDays(expEnd, 1), addDays(expEnd, 400)).length && daysBetween(today, expEnd) <= 60);
+      if (daysBetween(today, expEnd) < 0) out.push({ level:'bad', cardId:c.id, text:`${c.bank} ${c.name} expired (${c.expiry}). Update the card on: ${mine.map(s => s.name).join(', ')}.` });
+      else if (hit.length) out.push({ level:'warn', cardId:c.id, text:`${c.bank} ${c.name} expires ${c.expiry}. Update the new card details on: ${hit.map(s => s.name).join(', ')}.` }); }
+  }
+  for (const s of active) {
+    const p = payer(s);
+    if (s.cardId && !p) out.push({ level:'bad', subId:s.id, text:`${s.name} is linked to a card that no longer exists. Edit it and choose a payment card.` });
+    if (s.trialEnd && s.trialEnd >= today && daysBetween(today, s.trialEnd) <= 7) out.push({ level:'warn', subId:s.id, cardId:s.cardId, text:`${s.name} free trial ends ${s.trialEnd}. You'll be charged ${fmtPlain(subAED(S, s))} after that unless you cancel.` });
+    if (s.cycle === 'yearly' && s.next && daysBetween(today, s.next) >= 0 && daysBetween(today, s.next) <= 30) out.push({ level:'warn', subId:s.id, cardId:s.cardId, text:`${s.name} renews for a full year on ${s.next}: ${fmtPlain(subAED(S, s))}${p ? ' on ' + p.bank + ' ' + p.name : ''}.` });
+    if (s.auto === false && s.next && s.next < today) out.push({ level:'bad', subId:s.id, cardId:s.cardId, text:`${s.name} was due ${s.next} and hasn't been marked as paid.` });
+  }
+  const names = {}; for (const s of active) { const k = s.name.toLowerCase().replace(/[^a-z0-9]/g, ''); (names[k] ||= []).push(s); }
+  for (const list of Object.values(names)) if (list.length > 1) out.push({ level:'warn', subId:list[0].id, text:`You have ${list.length} active ${list[0].name} subscriptions. Is one a duplicate?` });
+  // price change: last auto-recorded charge vs current amount
+  for (const s of active) { const last = S.tx.filter(t => t.subId === s.id).sort((a,b) => b.date.localeCompare(a.date))[0];
+    if (last && Math.abs(last.amount - subAED(S, s)) > 0.5 && !last.auto) out.push({ level:'info', subId:s.id, text:`${s.name}: last charge was ${fmtPlain(last.amount)}, now set to ${fmtPlain(subAED(S, s))}.` }); }
+  const rank = { bad:0, warn:1, info:2 }; return out.sort((a,b) => rank[a.level] - rank[b.level]);
+}
+const fmtPlain = v => 'AED ' + (+v).toLocaleString('en-US', { maximumFractionDigits: v >= 1000 ? 0 : 2 });
 
 /* ---- Ledger: balances as of a date ---- */
 function ledger(S, upTo = null) {
@@ -397,6 +463,10 @@ function reminders(S, L, days = 30) {
   for (const g of S.goals) if (+g.remindDay && +g.monthly > 0) { const gi = goalInfo(S, L, g); if (gi.remaining > 0) { const d = nextDayOfMonth(+g.remindDay);
     const done = S.tx.some(t => t.type==='goal_contribution' && t.goalId===g.id && ymOf(t.date)===ymOf(d));
     if (!done && d <= end) out.push({ kind:'savings', id:g.id, ref:'goal', title:`Save for ${g.name}`, amount:+g.monthly, date:d }); } }
+  for (const s of (S.subs || [])) { if (!subActive(s)) continue;
+    const cardLbl = s.cardId ? (S.cards.find(c => c.id === s.cardId) || {}) : null;
+    const due = s.auto === false && s.next < today ? [s.next] : chargesBetween(s, today, end).slice(0, 2);
+    for (const d of due) out.push({ kind:'subscription', id:s.id, ref:'sub', title: s.name + (cardLbl ? ` · ${cardLbl.bank || ''} ${cardLbl.name || ''}` : ''), amount: subAED(S, s), date: d, auto: s.auto !== false }); }
   for (const o of out) o.daysLeft = daysBetween(today, o.date);
   return out.sort((a,b) => a.date < b.date ? -1 : 1);
 }
@@ -462,8 +532,11 @@ function insights(S, L, ym, fmt) {
   const B = budgetStatus(S, ym); const over = B.rows.filter(r => r.status === 'over'), warn = B.rows.filter(r => r.status === 'warn');
   if (over.length) out.push({ tone:'bad', text: `Over budget in ${over.map(r=>r.cat).join(', ')}.` });
   if (warn.length) out.push({ tone:'warn', text: `Above 80% of budget in ${warn.map(r=>r.cat).join(', ')}.` });
-  const subs = S.tx.filter(t => t.type==='expense' && t.category==='Subscriptions' && inCycle(t, ym));
-  if (subs.length >= 3) out.push({ tone:'info', text: `${subs.length} subscription charges this month, totalling ${fmt(sum(subs.map(t=>t.amount)))}. Review any you no longer use.` });
+  const act = (S.subs || []).filter(subActive);
+  if (act.length) { const mo = sum(act.map(s => subMonthly(S, s))); out.push({ tone:'info', text: `You have ${act.length} active subscriptions costing about ${fmt(mo)} a month (${fmt(mo * 12)} a year). Review any you no longer use.` }); }
+  else { const subs = S.tx.filter(t => t.type==='expense' && t.category==='Subscriptions' && inCycle(t, ym));
+    if (subs.length >= 3) out.push({ tone:'info', text: `${subs.length} subscription charges this month, totalling ${fmt(sum(subs.map(t=>t.amount)))}. Review any you no longer use.` }); }
+  for (const w of subWarnings(S, L, 14).filter(w => w.level === 'bad').slice(0, 2)) out.push({ tone:'bad', text: w.text });
   return out;
 }
 
@@ -524,6 +597,7 @@ function factsSnapshot(S, ym, cur) {
     goals: S.goals.map(g => { const gi = goalInfo(S, L, g); return { goal:g.name, target:+g.target, saved:r2(gi.saved), targetDate:g.date, requiredMonthly: gi.required!=null ? r2(gi.required) : null, avgMonthlyContribution:r2(gi.avg) }; }),
     budgets: B.rows.map(r => ({ category:r.cat, limit:r2(r.effective), spent:r2(r.spent), pctUsed:r2(r.pct) })),
     debtToIncomePct: r2(D.ratio), monthlyDebtPayments: r2(D.total), savingsRateThisMonthPct: r2(m.savingsRate), healthScore: H.score,
+    subscriptions: (S.subs||[]).map(x => ({ name:x.name, status:x.status||'active', cycle:x.cycle, chargeAED: subAED(S,x), monthlyAED: r2(subMonthly(S,x)), next:x.next, paidWith: x.cardId ? (S.cards.find(c=>c.id===x.cardId)||{}).name : (S.accounts.find(c=>c.id===x.accountId)||{}).name })),
     upcoming: reminders(S, L, 30).map(r => ({ what:r.title, amount:r2(r.amount), due:r.date })) };
 }
 
@@ -541,6 +615,8 @@ function answer(S, ym, q, fmt) {
     return need.length ? `To hit every goal on time you need ${fmt(sum(need.map(x=>x.i.required)))} a month: ${need.map(x=>`${x.g.name} ${fmt(x.i.required)}`).join(', ')}.` : 'No goals with a target date and remaining balance. Add a goal to get a monthly figure.'; }
   if (/safely save|can i save|safe to save/.test(q)) { const a = avgMonthly(S, ym, 3); const surplus = a.income - a.expense; const safe = Math.max(0, surplus - a.income*0.05);
     return `Over the last 3 months you averaged ${fmt(a.income)} income and ${fmt(a.expense)} expenses, a surplus of ${fmt(surplus)}. Keeping a 5% of income buffer for irregular costs, you can safely save about ${fmt(safe)} a month.`; }
+  if (/subscri|netflix|noon|careem|prime/.test(q)) { const act = (S.subs||[]).filter(subActive); if (!act.length) return 'No subscriptions recorded yet. Add them on the Subscriptions page.';
+    const mo = sum(act.map(s => subMonthly(S, s))); return `You have ${act.length} active subscriptions costing about ${fmt(mo)} a month (${fmt(mo*12)} a year). Next charges: ${act.filter(s=>s.next).sort((a,b)=>a.next.localeCompare(b.next)).slice(0,4).map(s => `${s.name} ${fmt(subAED(S,s))} on ${s.next}`).join(', ')}.`; }
   if (/spend|spent/.test(q)) return `You spent ${fmt(m.expense)} in ${ymLong(ym)} against ${fmt(m.income)} income. Top categories: ${top(m.byCat).map(([c,v])=>`${c} ${fmt(v)}`).join(', ') || 'none yet'}.`;
   if (/income|earn/.test(q)) return `Income in ${ymLong(ym)}: ${fmt(m.income)} — ${top(m.incByCat,5).map(([c,v])=>`${c} ${fmt(v)}`).join(', ')}.`;
   return null;
@@ -581,10 +657,6 @@ function demoState() {
   tx({ type:'expense', date: dateOn(m0, 1), amount: 7500, category:'Rent & Housing', accountId: enbd, payee:'Apartment rent (JVC)', method:'Cheque', recurring:'monthly' });
   tx({ type:'loan_payment', date: dateOn(m0, 1), amount: carEmi, loanId: car, accountId: enbd, payee:'Car loan EMI', method:'Direct debit', recurring:'monthly' });
   tx({ type:'expense', date: dateOn(m0, 8), amount: 389, category:'Internet & Mobile', accountId: enbd, payee:'du Home Internet', method:'Direct debit', recurring:'monthly' });
-  tx({ type:'expense', date: dateOn(m0, 10), amount: 125, category:'Internet & Mobile', cardId: c3, payee:'Etisalat mobile plan', method:'Credit card', recurring:'monthly' });
-  tx({ type:'expense', date: dateOn(m0, 15), amount: 56, category:'Subscriptions', cardId: c3, payee:'Netflix', method:'Credit card', recurring:'monthly' });
-  tx({ type:'expense', date: dateOn(m0, 17), amount: 22, category:'Subscriptions', cardId: c3, payee:'Spotify', method:'Credit card', recurring:'monthly' });
-  tx({ type:'expense', date: dateOn(m0, 3), amount: 250, category:'Healthcare', cardId: c2, payee:'Gym membership', method:'Credit card', recurring:'monthly' });
   tx({ type:'goal_contribution', date: dateOn(m0, 29), amount: 2500, goalId: gEF, accountId: enbd, payee:'Emergency fund', recurring:'monthly' });
   tx({ type:'goal_contribution', date: dateOn(m0, 29), amount: 800, goalId: gTr, accountId: enbd, payee:'Trip savings', recurring:'monthly' });
   tx({ type:'goal_contribution', date: dateOn(m0, 29), amount: 1500, goalId: gHouse, accountId: fabS, payee:'House deposit', recurring:'monthly' });
@@ -623,8 +695,21 @@ function demoState() {
   S.bills.push({ id: uid(), name:'DEWA electricity & water', kind:'utility', category:'Electricity & Water', amount: 600, freq:'monthly', dueDay: 22, active:true });
   S.bills.push({ id: uid(), name:'Apartment rent cheque', kind:'rent', category:'Rent & Housing', amount: 7500, freq:'monthly', dueDay: 1, active:true });
   S.bills.push({ id: uid(), name:'du Home Internet', kind:'utility', category:'Internet & Mobile', amount: 389, freq:'monthly', dueDay: 8, active:true });
-  S.bills.push({ id: uid(), name:'Netflix', kind:'subscription', category:'Subscriptions', amount: 56, freq:'monthly', dueDay: 15, active:true });
   S.bills.push({ id: uid(), name:'Car insurance renewal', kind:'bill', category:'Transportation', amount: 2350, freq:'yearly', start: addMonths(dateOn(ymOf(T), 18), 1), active:true });
+  // subscriptions (charged automatically to cards from the first demo month)
+  const Sb = (o) => S.subs.push({ id: uid(), status:'active', auto:true, currency:'AED', category:'Subscriptions', cycle:'monthly', ...o });
+  Sb({ name:'Netflix', icon:'🎬', amount: 56, cardId: c3, next: dateOn(m0, 15) });
+  Sb({ name:'Spotify', icon:'🎵', amount: 22, cardId: c3, next: dateOn(m0, 17) });
+  Sb({ name:'Amazon Prime', icon:'📦', amount: 16, cardId: c1, next: dateOn(m0, 6) });
+  Sb({ name:'noon One', icon:'🟡', amount: 25, cardId: c2, next: dateOn(m0, 21) });
+  Sb({ name:'Careem Plus', icon:'🟢', amount: 19, cardId: c1, next: dateOn(m0, 11) });
+  Sb({ name:'ChatGPT Plus', icon:'🤖', amount: 20, currency:'USD', cardId: c1, next: dateOn(m0, 24) });
+  Sb({ name:'Gym membership', icon:'🏋️', amount: 250, cardId: c2, category:'Healthcare', next: dateOn(m0, 3) });
+  Sb({ name:'Mobile plan (du / e&)', icon:'📶', amount: 125, cardId: c3, category:'Internet & Mobile', next: dateOn(m0, 10) });
+  Sb({ name:'Microsoft 365', icon:'🗂️', amount: 339, cycle:'yearly', cardId: c3, next: addDays(T, 12) });
+  Sb({ name:'Shahid VIP', icon:'📺', amount: 30, cardId: c2, next: addDays(T, 4), trialEnd: addDays(T, 3) });
+  S.cards.find(c => c.id === c3).expiry = ymAdd(ymOf(T), 1);
+  generateSubs(S);
   // mark bills already paid where an expense exists in the period (recurring generator will create them)
   generateRecurring(S);
   // card payments: pay last month's card spend (ENBD & Mashreq in full, ADCB ~70%)
@@ -641,7 +726,7 @@ function demoState() {
   return S;
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { setCycleDay, cycleOf, monthRange, cycleLabel, emptyState, demoState, ledger, monthAgg, periodAgg, budgetStatus, cardInfo, loanInfo, goalInfo, emi, flatEmi, flatToReducing, amortize, earlySettlement, reminders, islamicEvents, dti, healthScore, insights, spendingFlags, buildReport, generateRecurring, answer, factsSnapshot, setToday, todayISO, addMonths, ymAdd, ymOf, sum, r2, monthlyDebtPayments, uid, billNextDue };
+if (typeof module !== 'undefined' && module.exports) module.exports = { generateSubs, subWarnings, subMonthly, subAED, chargesBetween, SUB_PRESETS, setCycleDay, cycleOf, monthRange, cycleLabel, emptyState, demoState, ledger, monthAgg, periodAgg, budgetStatus, cardInfo, loanInfo, goalInfo, emi, flatEmi, flatToReducing, amortize, earlySettlement, reminders, islamicEvents, dti, healthScore, insights, spendingFlags, buildReport, generateRecurring, answer, factsSnapshot, setToday, todayISO, addMonths, ymAdd, ymOf, sum, r2, monthlyDebtPayments, uid, billNextDue };
 </script>
 <script>/* ===== UI layer ===== */
 let S = null;                       // app state
@@ -682,6 +767,7 @@ const IC = {
   alerts:'<path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
   accounts:'<path d="M3 9l9-5 9 5v1H3zM5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  subs:'<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon:'<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
@@ -689,7 +775,7 @@ const IC = {
 };
 const ico = (k, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${IC[k]||''}</svg>`;
 const PAGES = [
-  ['dashboard','Dashboard'],['money','Income & Expenses'],['budgets','Budgets'],['cards','Credit Cards'],['loans','Loans & EMI'],['goals','Savings Goals'],
+  ['dashboard','Dashboard'],['money','Income & Expenses'],['subs','Subscriptions'],['budgets','Budgets'],['cards','Credit Cards'],['loans','Loans & EMI'],['goals','Savings Goals'],
   ['invest','Investments'],['reports','Reports'],['assistant','AI Assistant'],['alerts','Reminders'],['accounts','Accounts'],['settings','Settings']
 ];
 const CAT_ICON = {'Rent & Housing':'🏠','Groceries':'🛒','Restaurants & Dining':'🍽️','Transportation':'🚕','Fuel':'⛽','Salik & Darb':'🛣️','Electricity & Water':'💡','Internet & Mobile':'📶','Shopping':'🛍️','Healthcare':'🩺','Family':'👨‍👩‍👧','Education':'🎓','Entertainment':'🎬','Travel':'✈️','Subscriptions':'🔁','Loan EMI':'🏦','Bank Fees':'🧾','Other':'📦',
@@ -702,6 +788,7 @@ const CARD_GRADS = ['linear-gradient(135deg,#1e1b4b,#7c3aed)','linear-gradient(1
 function toast(msg, tone = 'good', ms = 3200) {
   let box = $('.toasts'); if (!box) { box = document.createElement('div'); box.className = 'toasts'; document.body.appendChild(box); }
   const t = document.createElement('div'); t.className = 'toast ' + tone; t.textContent = msg; box.appendChild(t);
+  const max = innerWidth < 860 ? 2 : 4; while (box.children.length > max) box.firstChild.remove();
   setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 300); }, ms);
 }
 function modal(title, body, { wide = false, foot = '' } = {}) {
@@ -723,6 +810,7 @@ function openForm({ title, fields, values = {}, submit = 'Save', onSubmit, onDel
   for (const f of fields) if (f.money && vals[f.k] != null && vals[f.k] !== '') vals[f.k] = toDisp(vals[f.k]);
   const fieldHTML = f => {
     if (f.type === 'row') return `<div class="frow">${f.items.map(fieldHTML).join('')}</div>`;
+    if (f.type === 'html') return `<div class="fld" data-k="${f.k}">${f.label ? `<label>${esc(f.label)}</label>` : ''}${f.html}</div>`;
     const v = vals[f.k] ?? f.def ?? '';
     const lab = `<label for="f_${f.k}">${esc(f.label)}${f.req ? ' *' : ''}${f.money ? ` <span class="mut">(${curCode()})</span>` : ''}</label>`;
     let inp;
@@ -737,7 +825,7 @@ function openForm({ title, fields, values = {}, submit = 'Save', onSubmit, onDel
   const sc = modal(title, `<form id="frm" novalidate>${fields.map(fieldHTML).join('')}<button type="submit" hidden></button></form>`, { wide,
     foot: `${onDelete ? '<button class="btn danger" id="fdel" type="button">Delete</button>' : ''}<span class="sp"></span><button class="btn" data-act="closeModal" type="button">Cancel</button><button class="btn pri" id="fsave" type="button">${esc(submit)}</button>` });
   const form = $('#frm', sc); const flat = fields.flatMap(f => f.type === 'row' ? f.items : [f]);
-  const read = () => { const o = {}; for (const f of flat) { const el = form.elements[f.k]; if (!el) continue;
+  const read = () => { const o = {}; for (const f of flat) { if (f.type === 'html') continue; const el = form.elements[f.k]; if (!el) continue;
     if (f.type === 'check') o[f.k] = el.checked; else if (f.type === 'file') o[f.k] = el.files?.[0] || null;
     else if (f.money || f.type === 'number') o[f.k] = el.value === '' ? '' : +el.value; else o[f.k] = el.value; } return o; };
   const refresh = () => { const o = read(); for (const f of flat) { const box = $(`.fld[data-k="${f.k}"]`, form); if (box && f.show) box.style.display = f.show(o) ? '' : 'none';
@@ -745,6 +833,7 @@ function openForm({ title, fields, values = {}, submit = 'Save', onSubmit, onDel
     flat.forEach(f => f.live && f.live(o, form)); };
   form.addEventListener('input', refresh); form.addEventListener('change', refresh);
   $$('[data-seg]', form).forEach(sg => sg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; $$('button', sg).forEach(x => x.classList.toggle('on', x === b)); form.elements[sg.dataset.seg].value = b.dataset.v; refresh(); }));
+  flat.forEach(f => f.bind && f.bind(form, refresh));
   refresh();
   const doSubmit = async () => {
     $$('.fld', form).forEach(b => { b.classList.remove('err'); $('.em', b)?.remove(); });
@@ -865,7 +954,7 @@ function loadScript(src) { return libCache[src] ||= new Promise((res, rej) => { 
 
 /* ---------- mutations ---------- */
 function commit(msg, tone) {
-  generateRecurring(S); scheduleSave(); render(); if (msg) toast(msg, tone);
+  generateRecurring(S); generateSubs(S); scheduleSave(); render(); if (msg) toast(msg, tone);
 }
 function budgetAlertFor(t) {
   if (!isExpenseTx(t)) return;
@@ -900,6 +989,7 @@ function txRow(t) {
 }
 
 /* ---------- transaction form ---------- */
+const QUICK = [['noon','🟡','Shopping'],['Amazon.ae','📦','Shopping'],['Careem','🟢','Transportation'],['Careem Food','🍔','Restaurants & Dining'],['Talabat','🛵','Restaurants & Dining'],['Uber','🚕','Transportation'],['Carrefour','🛒','Groceries'],['Lulu','🛒','Groceries'],['Spinneys','🛒','Groceries'],['ADNOC','⛽','Fuel'],['ENOC','⛽','Fuel'],['Salik top-up','🛣️','Salik & Darb'],['Darb','🛣️','Salik & Darb'],['Nol / RTA','🚇','Transportation'],['DEWA','💡','Electricity & Water'],['ADDC','💡','Electricity & Water'],['Pharmacy','💊','Healthcare'],['Coffee','☕','Restaurants & Dining']];
 function txForm(type = 'expense', existing = null, preset = {}) {
   const t = existing ? { ...existing } : { type, date: todayISO(), ...preset };
   if (!existing && !t.accountId && S.accounts[0]) t.accountId = S.accounts[0].id;
@@ -908,6 +998,8 @@ function txForm(type = 'expense', existing = null, preset = {}) {
   const fields = [
     { k:'type', label:'Type', type:'select', options: Object.entries(TX_TYPES).filter(([k]) => !k.startsWith('invest')) },
     { type:'row', items:[ { k:'amount', label:'Amount', money:true, req:true, positive:true }, { k:'date', label:'Date', type:'date', req:true } ] },
+    { k:'_quick', type:'html', label:'Quick pick', show: isT('expense'), html: `<div class="chips">${QUICK.map((q, i) => `<button type="button" class="chip" data-q="${i}">${q[1]} ${esc(q[0])}</button>`).join('')}</div>`,
+      bind: (form, refresh) => $$('[data-q]', form).forEach(b => b.onclick = () => { const q = QUICK[+b.dataset.q]; form.elements.payee.value = q[0]; form.elements.category.value = q[2]; refresh(); form.elements.amount.focus(); }) },
     { k:'payee', label:'Description / payee', ph:'e.g. Carrefour, DEWA, salary' },
     { k:'category', label:'Category', type:'select', options: o => o.type === 'income' ? INC_CATS : EXP_CATS, show: isT('expense','income') },
     { k:'method', label:'Payment method', type:'select', options: METHODS, show: isT('expense') },
@@ -972,14 +1064,14 @@ function legend(labels, colors) { return `<div class="legend">${labels.map((l, i
 
 /* ---------- shell ---------- */
 function shell() {
-  const nav = PAGES.map(([k, l]) => `<button class="nav" data-act="go" data-p="${k}" id="nav_${k}">${ico(k)}<span>${l}</span>${k==='alerts' ? '<span class="cnt" id="navcnt" hidden></span>' : ''}</button>`).join('');
+  const nav = PAGES.map(([k, l]) => `<button class="nav" data-act="go" data-p="${k}" id="nav_${k}">${ico(k)}<span>${l}</span>${k==='alerts' ? '<span class="cnt" id="navcnt" hidden></span>' : k==='subs' ? '<span class="cnt" id="subcnt" hidden></span>' : ''}</button>`).join('');
   document.body.innerHTML = `<div class="app"><aside class="side"><div class="brand"><div class="logo">D</div>Dirham<span style="color:var(--acc2)">Wise</span></div>${nav}<div class="sidefoot">Your private finance workspace</div></aside>
   <div class="main"><header class="top"><h1 id="ptitle"></h1><span class="sp"></span><div id="mpick"></div><span class="pill hide-m" id="sync"></span>
   <select class="inp hide-m" id="curSel" style="width:auto;padding:7px 9px" aria-label="Currency">${Object.keys(CURRENCIES).map(c => `<option ${c===curCode()?'selected':''}>${c}</option>`).join('')}</select>
   <button class="icon-btn" data-act="go" data-p="alerts" aria-label="Reminders">${ico('alerts')}<span class="dot" id="bell" hidden></span></button>
   <button class="icon-btn" data-act="theme" aria-label="Toggle theme" id="themeBtn"></button>
   <button class="btn pri hide-m" data-act="addTx">+ Add</button></header><main class="content" id="view"></main></div></div>
-  <nav class="bnav">${[['dashboard','Home'],['money','Money'],['budgets','Budgets'],['cards','Cards'],['more','More']].map(([k,l]) => `<button data-act="${k==='more'?'more':'go'}" data-p="${k}" id="bn_${k}">${ico(k)}${l}</button>`).join('')}</nav>
+  <nav class="bnav">${[['dashboard','Home'],['money','Money'],['subs','Subs'],['cards','Cards'],['more','More']].map(([k,l]) => `<button data-act="${k==='more'?'more':'go'}" data-p="${k}" id="bn_${k}">${ico(k)}${l}</button>`).join('')}</nav>
   <button class="fab" data-act="addTx" aria-label="Add transaction">+</button>`;
   $('#curSel').onchange = e => { S.settings.currency = e.target.value; commit(); };
   setSync(PST.status || (PST.mode === 'cloud' ? 'Saved' : 'Saved on this device'), PST.mode === 'cloud' ? 'ok' : 'loc');
@@ -995,11 +1087,12 @@ function render() {
   const p = V.page; const title = PAGES.find(x => x[0] === p)?.[1] || '';
   $('#ptitle').textContent = p === 'dashboard' ? (S.settings.name ? `Hi, ${S.settings.name}` : 'Overview') : title;
   $$('.nav').forEach(n => n.classList.toggle('on', n.dataset.p === p));
-  $$('.bnav button').forEach(n => n.classList.toggle('on', n.dataset.p === p || (n.dataset.p === 'more' && !['dashboard','money','budgets','cards'].includes(p))));
+  $$('.bnav button').forEach(n => n.classList.toggle('on', n.dataset.p === p || (n.dataset.p === 'more' && !['dashboard','money','subs','cards'].includes(p))));
   const mp = $('#mpick');
   mp.innerHTML = MONTH_PAGES.includes(p) ? `<div class="mpick"><button data-act="mprev" aria-label="Previous month">‹</button><span title="${esc(cycleLabel(V.ym))}">${ymLabel(V.ym)}</span><button data-act="mnext" aria-label="Next month">›</button></div>` : '';
   const L = ledger(S); const due = reminders(S, L, +S.settings.remindDays || 5).length + budgetStatus(S, cycleOf(todayISO())).rows.filter(r => r.status === 'over').length;
   const bell = $('#bell'); bell.hidden = !due; bell.textContent = due; const nc = $('#navcnt'); if (nc) { nc.hidden = !due; nc.textContent = due; }
+  const sw = subWarnings(S, L, 30).filter(w => w.level !== 'info').length; const sc = $('#subcnt'); if (sc) { sc.hidden = !sw; sc.textContent = sw; }
   $('#curSel').value = curCode(); applyTheme();
   const view = $('#view');
   try { view.innerHTML = (PAGE[p] || PAGE.dashboard)(L); PAGE_AFTER[p]?.(L); }
@@ -1068,7 +1161,9 @@ const insRow = i => `<div class="ins"><i>${{ good:'✅', warn:'⚠️', bad:'�
 function remRow(r) {
   const ic = { card:'💳', loan:'🏦', rent:'🏠', utility:'💡', subscription:'🔁', savings:'🎯', bill:'🧾' }[r.kind] || '🧾';
   const when = r.daysLeft < 0 ? `<span class="tag bad">${-r.daysLeft}d overdue</span>` : r.daysLeft === 0 ? '<span class="tag warn">Today</span>' : r.daysLeft <= 3 ? `<span class="tag warn">in ${r.daysLeft}d</span>` : `<span class="tag">in ${r.daysLeft}d</span>`;
-  return `<div class="row"><div class="av">${ic}</div><div class="t"><b>${esc(r.title)}</b><small>${dlong(r.date)}${S.settings.hijri ? ` · ${esc(hijri(r.date))}` : ''}${r.min ? ` · min ${fmt(r.min)}` : ''}</small></div><div style="text-align:right"><div class="amt">${fmt(r.amount)}</div><div style="margin-top:4px;display:flex;gap:4px;justify-content:flex-end">${when}<button class="btn sm" data-act="payRem" data-ref="${r.ref}" data-id="${r.id}" data-date="${r.date}">Pay</button></div></div></div>`;
+  const subObj = r.ref === 'sub' ? S.subs.find(x => x.id === r.id) : null; const ic2 = subObj?.icon || ic;
+  if (r.ref === 'sub' && r.auto && r.daysLeft >= 0) return `<div class="row" data-act="editSub" data-id="${r.id}" style="cursor:pointer"><div class="av">${ic2}</div><div class="t"><b>${esc(r.title)}</b><small>${dlong(r.date)}${S.settings.hijri ? ` · ${esc(hijri(r.date))}` : ''} · charged automatically</small></div><div style="text-align:right"><div class="amt">${fmt(r.amount)}</div><div style="margin-top:4px">${when}</div></div></div>`;
+  return `<div class="row"><div class="av">${ic2}</div><div class="t"><b>${esc(r.title)}</b><small>${dlong(r.date)}${S.settings.hijri ? ` · ${esc(hijri(r.date))}` : ''}${r.min ? ` · min ${fmt(r.min)}` : ''}</small></div><div style="text-align:right"><div class="amt">${fmt(r.amount)}</div><div style="margin-top:4px;display:flex;gap:4px;justify-content:flex-end">${when}<button class="btn sm" data-act="payRem" data-ref="${r.ref}" data-id="${r.id}" data-date="${r.date}">Pay</button></div></div></div>`;
 }
 
 /* --- Money --- */
@@ -1132,6 +1227,62 @@ PAGE_AFTER.money = () => {
   if ($('#c_exp')) mkChart('c_exp', { type:'line', data:{ labels: months.map(ymLabel), datasets:[{ label:'Expenses', data: ag.map(a => a.expense), borderColor:'#7C6CFF', backgroundColor:'rgba(124,108,255,.15)', fill:true, tension:.35, pointRadius:2 }] } });
 };
 
+/* --- Subscriptions --- */
+const CYCLES = [['weekly','Weekly'],['monthly','Monthly'],['quarterly','Quarterly'],['yearly','Yearly']];
+const payLabel = s => s.cardId ? `💳 ${cardName(s.cardId)}` : s.accountId ? `🏦 ${accName(s.accountId)}` : 'No payment method';
+PAGE.subs = L => {
+  const all = S.subs || []; const act = all.filter(subActive); const mo = sum(act.map(s => subMonthly(S, s)));
+  const next30 = sum(act.flatMap(s => chargesBetween(s, todayISO(), addDays(todayISO(), 30)).map(() => subAED(S, s))));
+  const warns = subWarnings(S, L, 30);
+  const groups = {}; for (const s of act) { const k = s.cardId || s.accountId || 'none'; (groups[k] ||= []).push(s); }
+  const order = { active:0, paused:1, cancelled:2 };
+  return `<div class="grid g4" style="margin-bottom:16px">${kpi('Monthly cost', fmt(mo), `${act.length} active`, '🔁', 'acc')}${kpi('Yearly cost', fmt(mo * 12), 'at current prices', '📅', 'warn')}${kpi('Next 30 days', fmt(next30), 'will be charged', '⏳', 'info')}${kpi('Warnings', String(warns.filter(w => w.level !== 'info').length), warns.length ? 'see below' : 'all clear', '🚨', warns.some(w => w.level === 'bad') ? 'bad' : 'good')}</div>
+  <div class="toolbar"><h3 style="margin:0;font-size:15px">Subscriptions</h3><span style="flex:1"></span><button class="btn pri" data-act="addSub">+ Add subscription</button></div>
+  ${warns.length ? `<div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Payment warnings</h3></div>${warns.map(w => `<div class="ins"><i>${{ bad:'🔴', warn:'⚠️', info:'💡' }[w.level]}</i><div>${esc(w.text)}${w.subId ? ` <button class="btn sm ghost" data-act="editSub" data-id="${w.subId}">Fix</button>` : w.cardId ? ` <button class="btn sm ghost" data-act="editCard" data-id="${w.cardId}">Edit card</button>` : ''}</div></div>`).join('')}</div>` : ''}
+  ${all.length ? `<div class="grid g3"><div class="span2">
+    ${Object.entries(groups).map(([k, list]) => `<div class="panel" style="margin-bottom:16px"><div class="ph"><h3>${esc(payLabel(list[0]))}</h3><span class="sp"></span><b>${fmt(sum(list.map(s => subMonthly(S, s))))}<span class="mut" style="font-weight:500">/mo</span></b></div><div class="list">${list.sort((a,b) => (a.next||'').localeCompare(b.next||'')).map(subRow).join('')}</div></div>`).join('')}
+    ${all.filter(s => !subActive(s)).length ? `<div class="panel"><div class="ph"><h3>Paused & cancelled</h3></div><div class="list">${all.filter(s => !subActive(s)).sort((a,b) => order[a.status] - order[b.status]).map(subRow).join('')}</div></div>` : ''}
+  </div><div class="panel"><div class="ph"><h3>Where the money goes</h3></div>${act.length ? `<div class="chart sm"><canvas id="c_subs"></canvas></div>${legend(act.sort((a,b) => subMonthly(S,b) - subMonthly(S,a)).slice(0, 10).map(s => `${s.name} ${fmt(subMonthly(S, s))}`), PALETTE)}` : empty('No active subscriptions.')}
+    <div class="hint" style="margin-top:12px;line-height:1.5">Charges are added as expenses on their renewal date (category Subscriptions unless you choose another), so they count in budgets and card balances. Foreign-currency subscriptions (e.g. USD) are converted at your Settings rate; your bank may add a foreign-transaction fee.</div></div></div>`
+  : `<div class="panel">${empty('Track Netflix, Amazon Prime, noon One, Careem Plus, Talabat Pro, Spotify, gym and more. Each one is linked to the card it bills, with warnings before renewals, trial endings, card expiry and low available credit.', 'addSub', 'Add your first subscription')}</div>`}`;
+};
+PAGE_AFTER.subs = () => { const act = (S.subs || []).filter(subActive).sort((a,b) => subMonthly(S,b) - subMonthly(S,a)); if ($('#c_subs')) mkChart('c_subs', { type:'doughnut', data:{ labels: act.map(s => s.name), datasets:[{ data: act.map(s => subMonthly(S, s)), backgroundColor: PALETTE, borderWidth:0 }] }, options:{ cutout:'66%' } }); };
+function subRow(s) {
+  const d = s.next ? daysBetween(todayISO(), s.next) : null; const st = s.status || 'active';
+  const tag = st !== 'active' ? `<span class="tag">${st}</span>` : s.trialEnd && s.trialEnd >= todayISO() ? `<span class="tag info">trial to ${dshort(s.trialEnd)}</span>` : d < 0 ? `<span class="tag bad">${-d}d overdue</span>` : d <= (+S.settings.remindDays || 5) ? `<span class="tag warn">in ${d}d</span>` : `<span class="tag">in ${d}d</span>`;
+  return `<div class="row"><div class="av">${s.icon || '🔁'}</div><div class="t" data-act="editSub" data-id="${s.id}" style="cursor:pointer"><b>${esc(s.name)}</b><small>${CYCLES.find(c => c[0] === s.cycle)?.[1] || 'Monthly'} · ${st !== 'active' ? 'not renewing' : s.trialEnd && s.trialEnd >= todayISO() ? 'first charge ' + dshort(s.next) : 'next ' + dshort(s.next)} · ${s.auto === false ? 'mark paid manually' : 'auto-recorded'}${s.currency && s.currency !== 'AED' ? ` · ${fmtCcy(s.amount, s.currency)}` : ''}</small></div>
+    <div style="text-align:right"><div class="amt">${fmt(subAED(S, s))}</div><div style="margin-top:4px;display:flex;gap:4px;justify-content:flex-end">${tag}${st === 'active' && s.auto === false ? `<button class="btn sm" data-act="paySub" data-id="${s.id}">Paid</button>` : ''}${st === 'active' ? `<button class="btn sm ghost" data-act="subStatus" data-id="${s.id}" data-v="paused">Pause</button>` : `<button class="btn sm ghost" data-act="subStatus" data-id="${s.id}" data-v="active">Resume</button>`}</div></div></div>`;
+}
+function subForm(sub) {
+  const def = { preset:'Netflix', name:'Netflix', icon:'🎬', cycle:'monthly', currency:'AED', category:'Subscriptions', next: addMonths(todayISO(), 1), auto:true, status:'active', pay: S.cards[0] ? 'card:' + S.cards[0].id : S.accounts[0] ? 'acc:' + S.accounts[0].id : '' };
+  const v = sub ? { ...sub, pay: sub.cardId ? 'card:' + sub.cardId : sub.accountId ? 'acc:' + sub.accountId : '', hasTrial: !!sub.trialEnd } : def;
+  openForm({ title: sub ? `Edit ${sub.name}` : 'Add subscription', values: v,
+    fields: [ ...(sub ? [] : [{ k:'preset', label:'Service', type:'select', options: SUB_PRESETS.map(p => [p[0], p[1] + ' ' + p[0]]), live: (o, form) => { if (form.dataset.lp !== o.preset) { form.dataset.lp = o.preset; const p = SUB_PRESETS.find(x => x[0] === o.preset); form.elements.name.value = o.preset === 'Other' ? '' : o.preset; form.elements.category.value = p[2]; form.elements.cycle.value = p[3]; } } }]),
+      { k:'name', label:'Name', req:true },
+      { type:'row', items:[ { k:'amount', label:'Price per charge', type:'number', req:true, positive:true, hint:'In the currency on the right' }, { k:'currency', label:'Billed in', type:'select', options: Object.keys(CURRENCIES) } ] },
+      { type:'row', items:[ { k:'cycle', label:'Billing cycle', type:'select', options: CYCLES }, { k:'next', label:'Next charge date', type:'date', req:true, validate: (d, o) => !sub && d < todayISO() ? 'Use the next upcoming date' : null } ] },
+      { k:'pay', label:'Charged to', type:'select', options: () => [...S.cards.map(c => ['card:' + c.id, `💳 ${c.bank} ${c.name}`]), ...S.accounts.map(a => ['acc:' + a.id, `🏦 ${a.name}`])], validate: v => !v ? 'Add a card or account first' : null },
+      { k:'category', label:'Expense category', type:'select', options: EXP_CATS },
+      { k:'hasTrial', label:'Currently on a free trial', type:'check' }, { k:'trialEnd', label:'Trial ends on', type:'date', show: o => o.hasTrial, validate: (d, o) => o.hasTrial && !d ? 'Required' : null },
+      { k:'auto', label:'Record the charge automatically on the renewal date', type:'check', hint:'Turn off if you want to confirm each payment yourself.' },
+      ...(sub ? [{ k:'status', label:'Status', type:'seg', options:[['active','Active'],['paused','Paused'],['cancelled','Cancelled']] }] : []),
+      { k:'notes', label:'Notes', type:'textarea', ph:'e.g. family plan, shared with…' } ],
+    onDelete: sub ? () => { S.subs = S.subs.filter(x => x.id !== sub.id); commit('Subscription removed (past charges kept)', 'info'); } : null,
+    onSubmit: o => { const [kind, pid] = o.pay.split(':'); const preset = SUB_PRESETS.find(p => p[0] === (o.preset || sub?.preset));
+      const icon = sub?.icon || preset?.[1] || (SUB_PRESETS.find(p => o.name.toLowerCase().includes(p[0].split(' ')[0].toLowerCase()))?.[1]) || '🔁';
+      const rec = { ...(sub || { id: uid(), created: Date.now() }), name: o.name.trim(), icon, amount: +o.amount, currency: o.currency, cycle: o.cycle, category: o.category, auto: o.auto, trialEnd: o.hasTrial ? o.trialEnd : null, next: o.hasTrial && o.next <= o.trialEnd ? addDays(o.trialEnd, 1) : o.next, status: o.status || sub?.status || 'active', notes: o.notes.trim(), preset: o.preset || sub?.preset };
+      delete rec.cardId; delete rec.accountId; if (kind === 'card') rec.cardId = pid; else rec.accountId = pid;
+      if (!S.subs) S.subs = []; if (sub) S.subs[S.subs.findIndex(x => x.id === sub.id)] = rec; else S.subs.push(rec);
+      commit(sub ? 'Subscription updated' : `${rec.name} added · next charge ${dshort(rec.next)}`); } });
+}
+function paySub(id) {
+  const s = S.subs.find(x => x.id === id); if (!s) return;
+  openForm({ title:`Record ${s.name} payment`, submit:'Record payment', values:{ amount: subAED(S, s), date: s.next <= todayISO() ? s.next : todayISO() },
+    fields:[ { type:'row', items:[ { k:'amount', label:'Amount charged', money:true, req:true, positive:true }, { k:'date', label:'Charged on', type:'date', req:true } ] } ],
+    onSubmit: o => { const t = { id: uid(), created: Date.now(), type:'expense', date: o.date, amount: r2(o.amount), category: s.category || 'Subscriptions', payee: s.name, method: s.cardId ? 'Credit card' : 'Direct debit', subId: s.id };
+      if (s.cardId) t.cardId = s.cardId; else t.accountId = s.accountId; S.tx.push(t); s.last = s.next; s.next = subAdvance(s.next, s.cycle); commit(`${s.name} payment recorded · next ${dshort(s.next)}`); budgetAlertFor(t); } });
+}
+
 /* --- Budgets --- */
 PAGE.budgets = () => {
   const B = budgetStatus(S, V.ym); const used = new Set(B.rows.map(r => r.cat));
@@ -1166,9 +1317,18 @@ PAGE.cards = L => {
   ${infos.length ? `<div class="grid g3">${infos.map(({ c, i }, k) => `<div><div class="ccard" style="background:${CARD_GRADS[k % CARD_GRADS.length]}"><div class="bk">${esc(c.bank)}</div><div class="nm">${esc(c.name)}</div><div class="bal">${fmt(Math.max(0, i.bal))}${i.bal < 0 ? ` <span style="font-size:13px">(credit ${fmt(-i.bal)})</span>` : ''}</div><div class="meta"><span>Limit ${fmt(i.limit)}</span><span>${pct(i.util,0)} used</span></div><div class="bar" style="margin-top:8px;background:rgba(255,255,255,.2);border:0"><i style="width:${clamp(i.util,0,100)}%;background:#fff"></i></div></div>
     <div class="panel" style="margin-top:10px;padding:14px"><div class="stats"><div class="stat"><span>Available</span><b>${fmt(i.available)}</b></div><div class="stat"><span>Due date</span><b>${dshort(i.due)} <span class="${i.daysToDue <= 5 && i.bal > 0 && !i.paidRecently ? 'down' : 'mut'}" style="font-size:12px">(${i.daysToDue}d)</span></b></div><div class="stat"><span>Minimum due</span><b>${fmt(i.minPay)}</b></div><div class="stat"><span>Statement</span><b>${dshort(i.stmt)}</b></div><div class="stat"><span>Cashback</span><b>${c.cashback || 0}% · ${fmt(i.cashback)}</b></div><div class="stat"><span>Annual fee</span><b>${+c.annualFee ? fmt(c.annualFee) : 'Free'}</b></div></div>
     ${i.paidRecently ? '<div style="margin-top:10px"><span class="tag good">Payment made this cycle</span></div>' : ''}
+    ${cardSubsBlock(c)}
     <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap"><button class="btn sm pri" data-act="payCard" data-id="${c.id}">Pay bill</button><button class="btn sm" data-act="cardBuy" data-id="${c.id}">+ Purchase</button><button class="btn sm" data-act="cardTx" data-id="${c.id}">Transactions</button><button class="btn sm ghost" data-act="editCard" data-id="${c.id}">Edit</button></div></div></div>`).join('')}</div>`
   : `<div class="panel">${empty('Add your UAE credit cards to track balances, due dates, utilisation and cashback.', 'addCard', 'Add a card')}</div>`}`;
 };
+function cardSubsBlock(c) {
+  const subs = (S.subs || []).filter(s => s.cardId === c.id && subActive(s)); const L = ledger(S);
+  const warns = subWarnings(S, L, 30).filter(w => w.cardId === c.id);
+  if (!subs.length && !warns.length) return '';
+  return `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px"><b>🔁 ${subs.length} subscription${subs.length===1?'':'s'}</b><span class="mut">${fmt(sum(subs.map(s => subMonthly(S, s))))}/mo</span></div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px">${subs.map(s => `<span class="tag" title="Next ${s.next}">${s.icon || '🔁'} ${esc(s.name)} · ${dshort(s.next)}</span>`).join('')}</div>
+    ${warns.map(w => `<div class="ins" style="margin:8px 0 0;font-size:12px"><i>${w.level === 'bad' ? '🔴' : '⚠️'}</i><div>${esc(w.text)}</div></div>`).join('')}</div>`;
+}
 function cardForm(c) {
   openForm({ title: c ? 'Edit card' : 'Add credit card', values: c ? { ...c, opening: c.opening } : { minPct:5, minFloor:100, statementDay:1, dueDay:25, cashback:0, annualFee:0, asOf: todayISO() },
     fields: [ { type:'row', items:[ { k:'bank', label:'Bank', req:true, ph:'e.g. Emirates NBD' }, { k:'name', label:'Card name', req:true, ph:'e.g. Skywards Infinite' } ] },
@@ -1176,7 +1336,8 @@ function cardForm(c) {
       { k:'asOf', label:'Balance as of', type:'date', req:true },
       { type:'row', items:[ { k:'statementDay', label:'Statement day (1–28)', type:'number', req:true, min:1, max:28 }, { k:'dueDay', label:'Payment due day (1–31)', type:'number', req:true, min:1, max:31 } ] },
       { type:'row', items:[ { k:'minPct', label:'Minimum payment %', type:'number', min:0, max:100, hint:'Most UAE cards: 5% or AED 100' }, { k:'minFloor', label:'Minimum payment floor', money:true, min:0 } ] },
-      { type:'row', items:[ { k:'cashback', label:'Cashback %', type:'number', min:0, max:20 }, { k:'annualFee', label:'Annual fee', money:true, min:0 } ] } ],
+      { type:'row', items:[ { k:'cashback', label:'Cashback %', type:'number', min:0, max:20 }, { k:'annualFee', label:'Annual fee', money:true, min:0 } ] },
+      { k:'expiry', label:'Card expiry (month)', type:'month', hint:'Used to warn you to update subscriptions before the card expires.' } ],
     onDelete: c ? () => { if (S.tx.some(t => t.cardId === c.id)) return toast('This card has transactions. Delete or move them first.', 'bad'); S.cards = S.cards.filter(x => x.id !== c.id); commit('Card deleted', 'info'); } : null,
     onSubmit: o => { const rec = { ...(c || { id: uid() }), ...o, limit: r2(o.limit), opening: r2(o.opening||0), minFloor: o.minFloor === '' ? 100 : o.minFloor };
       if (c) S.cards[S.cards.findIndex(x => x.id === c.id)] = rec; else S.cards.push(rec); commit(c ? 'Card updated' : 'Card added'); } });
@@ -1356,7 +1517,7 @@ async function exportReport(f) {
 }
 
 /* --- Assistant --- */
-const QUESTIONS = ['How much did I spend this month?','How much money can I safely save?','What are my biggest expenses?','How much debt do I have?','Can I afford a new loan?','How much should I save every month?','What is my current net worth?'];
+const QUESTIONS = ['How much did I spend this month?','What do my subscriptions cost?','How much money can I safely save?','What are my biggest expenses?','How much debt do I have?','Can I afford a new loan?','How much should I save every month?','What is my current net worth?'];
 let samplerP = null; const getSampler = () => samplerP ||= (window.claude?.use ? withTimeout(claude.use('sample'), 6000).catch(() => null) : Promise.resolve(null));
 PAGE.assistant = L => {
   const ins = insights(S, L, V.ym, fmt);
@@ -1402,6 +1563,7 @@ function billForm(b) {
 function payReminder(ref, id, date) {
   if (ref === 'card') return txForm('card_payment', null, { cardId: id, amount: Math.max(0, ledger(S).card[id] || 0), payee:'Card payment' });
   if (ref === 'loan') return txForm('loan_payment', null, { loanId: id, amount: loanInfo(S, ledger(S), S.loans.find(l => l.id === id)).emi, payee: loanName(id) + ' EMI', date: date <= todayISO() ? date : todayISO() });
+  if (ref === 'sub') return paySub(id);
   if (ref === 'goal') { const g = S.goals.find(x => x.id === id); return txForm('goal_contribution', null, { goalId: id, amount: g.monthly, payee: g.name }); }
   const b = S.bills.find(x => x.id === id);
   openForm({ title:`Pay ${b.name}`, values: { amount: b.amount, date: todayISO() > date ? todayISO() : todayISO(), method: 'Direct debit', accountId: S.accounts[0]?.id, cardId: S.cards[0]?.id },
@@ -1483,13 +1645,15 @@ function installHelp() {
 }
 
 const ACT = {
+  addSub: () => subForm(), editSub: d => subForm(S.subs.find(x => x.id === d.id)), paySub: d => paySub(d.id),
+  subStatus: d => { const s = S.subs.find(x => x.id === d.id); s.status = d.v; if (d.v === 'active' && s.next < todayISO()) { while (s.next < todayISO()) s.next = subAdvance(s.next, s.cycle); } commit(d.v === 'active' ? `${s.name} resumed` : `${s.name} paused`, 'info'); },
   setPin: () => openForm({ title: lockHash() ? 'Change PIN' : 'Set a PIN lock', fields:[ { k:'pin', label:'New PIN (4–8 digits)', type:'password', req:true, validate: v => /^\d{4,8}$/.test(v) ? null : 'Use 4 to 8 digits' }, { k:'pin2', label:'Repeat PIN', type:'password', req:true, validate: (v, o) => v !== o.pin ? 'PINs do not match' : null } ],
     onSubmit: async o => { lsSet(LOCK_KEY, await sha(o.pin)); render(); toast('PIN lock on. You\'ll need it each time you open the app.'); } }),
   removePin: () => confirmBox('Remove the PIN lock?', () => { lsDel(LOCK_KEY); render(); toast('PIN lock removed', 'info'); }, 'Remove'),
   install: () => installHelp(),
   go: d => go(d.p), closeModal, mprev: () => { V.ym = ymAdd(V.ym, -1); render(); }, mnext: () => { V.ym = ymAdd(V.ym, 1); render(); },
   theme: () => { const cur = document.documentElement.dataset.theme; S.settings.theme = cur === 'dark' ? 'light' : 'dark'; commit(); },
-  more: () => { const sc = modal('More', `<div class="list">${PAGES.filter(p => !['dashboard','money','budgets','cards'].includes(p[0])).map(([k, l]) => `<button class="nav" data-act="go" data-p="${k}" style="padding:13px 10px">${ico(k)}<span>${l}</span></button>`).join('')}</div>`); sc.addEventListener('click', e => { if (e.target.closest('[data-act=go]')) closeModal(); }); },
+  more: () => { const sc = modal('More', `<div class="list">${PAGES.filter(p => !['dashboard','money','subs','cards'].includes(p[0])).map(([k, l]) => `<button class="nav" data-act="go" data-p="${k}" style="padding:13px 10px">${ico(k)}<span>${l}</span></button>`).join('')}</div>`); sc.addEventListener('click', e => { if (e.target.closest('[data-act=go]')) closeModal(); }); },
   addTx: d => txForm(d.type || 'expense', null, d.cat ? { category: d.cat } : {}),
   editTx: d => { const t = S.tx.find(x => x.id === d.id); if (!t) return; if (t.type.startsWith('invest')) tradeForm(null, null, t); else txForm(t.type, t); },
   mtab: d => { V.money.tab = d.v; V.money.cat = ''; V.money.limit = 150; render(); }, moreTx: () => { V.money.limit = (V.money.limit || 150) + 150; render(); },
@@ -1516,7 +1680,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 /* ---------- boot ---------- */
 function startApp(msg) {
   setCycleDay(S.settings.cycleDay || 1); V.ym = cycleOf(todayISO());
-  const created = generateRecurring(S);
+  const created = generateRecurring(S) + generateSubs(S);
   shell(); const h = (location.hash || '').slice(1); V.page = PAGES.some(p => p[0] === h) ? h : 'dashboard';
   render(); scheduleSave();
   if (msg) toast(msg, 'info', 5000);
