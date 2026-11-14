@@ -1317,6 +1317,7 @@ PAGE.dashboard = L => {
     ${kpi('Savings rate', m.income && !(isCur && m.pendingIncome) ? pct(m.savingsRate) : '—', m.income && !(isCur && m.pendingIncome) ? `${fmt(m.net)} kept${isCur ? ' so far' : ''}` : m.pendingIncome ? `Shown after income arrives ${m.nextIncome ? dshort(m.nextIncome.date) : ''}` : 'No income recorded yet', '🐷', m.savingsRate >= 20 ? 'good' : 'warn')}
     ${kpi('Budget utilisation', B.rows.length ? pct(B.utilization, 0) : '—', B.rows.length ? `${fmt(B.totSpent)} of ${fmt(B.totLimit)}` : 'No budgets set', '🧮', B.utilization > 100 ? 'bad' : B.utilization > 80 ? 'warn' : 'good')}
   </div>
+  ${catPanel(ym)}
   <div class="grid g3" style="margin-bottom:16px">
     <div class="panel span2"><div class="ph"><h3>Income vs expenses</h3><span class="sp"></span><small>Last 6 months</small></div><div class="chart"><canvas id="c_ie"></canvas></div></div>
     <div class="panel"><div class="ph"><h3>Spending breakdown</h3><span class="sp"></span><small>${ymLabel(ym)}</small></div><div class="chart sm"><canvas id="c_cat"></canvas></div><div id="catleg"></div></div>
@@ -1343,6 +1344,25 @@ PAGE_AFTER.dashboard = L => {
     mkChart('c_sv', { type:'bar', data:{ labels: gi.map(x => x.g.name), datasets:[ { label:'Saved', data: gi.map(x => Math.min(x.i.saved, x.i.target)), backgroundColor:'#7C6CFF', borderRadius:6, maxBarThickness:22 }, { label:'Remaining', data: gi.map(x => x.i.remaining), backgroundColor: themeColors().grid, borderRadius:6, maxBarThickness:22 } ] },
       options:{ indexAxis:'y', scales:{ x:{ stacked:true, grid:{ color: themeColors().grid }, ticks:{ callback: v => compact(v) } }, y:{ stacked:true, grid:{ display:false } } }, plugins:{ legend:{ display:true, position:'bottom', labels:{ boxWidth:10, boxHeight:10 } }, tooltip:{ callbacks:{ afterBody: items => { const x = gi[items[0].dataIndex]; return `${x.i.pct.toFixed(0)}% of ${fmt(x.i.target)}`; } } } } } }); }
 };
+function catPanel(ym) {
+  const m = monthAgg(S, ym), pm = monthAgg(S, ymAdd(ym, -1)); const B = budgetStatus(S, ym); const bmap = Object.fromEntries(B.rows.map(r => [r.cat, r]));
+  const cats = Object.entries(m.byCat).filter(([, v]) => Math.abs(v) > 0.004).sort((a, b) => b[1] - a[1]);
+  const total = sum(cats.map(c => c[1])); const max = cats[0]?.[1] || 1;
+  const isCur = ym === cycleOf(todayISO());
+  const row = ([c, v], i) => { const b = bmap[c]; const prev = pm.byCat[c] || 0; const ch = prev ? (v - prev) / prev * 100 : null;
+    const barCls = b ? b.status : ''; const w = b ? clamp(b.pct, 0, 100) : v / max * 100;
+    return `<div data-act="catDrill" data-cat="${esc(c)}" style="cursor:pointer;padding:10px 4px;border-bottom:1px solid var(--line)">
+      <div style="display:flex;align-items:center;gap:10px"><div class="av" style="width:32px;height:32px;font-size:15px">${CAT_ICON[c] || '•'}</div>
+        <div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;gap:8px"><b style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c)}</b><b>${fmt(v)}</b></div>
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;margin-top:2px" class="mut"><span>${pct(total ? v / total * 100 : 0, 0)} of spending${ch != null && Math.abs(ch) >= 1 && !(isCur && ch < 0) ? ` · <span class="${ch > 0 ? 'down' : 'up'}">${ch > 0 ? '▲' : '▼'} ${Math.abs(ch).toFixed(0)}% vs last month</span>` : ''}</span>
+          <span>${b ? `${b.remaining >= 0 ? fmt(b.remaining) + ' left' : `<span class="down">${fmt(-b.remaining)} over</span>`} of ${fmt(b.effective)}` : ''}</span></div>
+          <div class="bar ${barCls}" style="margin-top:6px;height:6px"><i style="width:${w}%;${b ? '' : `background:${PALETTE[i % PALETTE.length]}`}"></i></div></div></div></div>`; };
+  const unbudgeted = cats.filter(([c]) => !bmap[c]).length;
+  return `<div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Spending by category</h3><span class="sp"></span><small>${ymLabel(ym)}${isCur ? ' so far' : ''} · ${fmt(total)}</small></div>
+    ${cats.length ? `<div class="grid g2" style="gap:0 24px">${(V.catAll ? cats : cats.slice(0, 8)).map(row).join('')}</div>${cats.length > 8 ? `<div style="text-align:center;margin-top:8px"><button class="btn sm" data-act="catAll">${V.catAll ? 'Show top 8' : `Show all ${cats.length} categories`}</button></div>` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:8px"><span class="mut" style="font-size:12px">Bars show budget used where you've set one${unbudgeted ? `; ${unbudgeted} categor${unbudgeted > 1 ? 'ies have' : 'y has'} no budget` : ''}. Tap a category to see its transactions.</span><button class="btn sm" data-act="go" data-p="budgets">Budgets →</button></div>`
+    : empty(isCur ? 'No spending recorded this month yet.' : 'No spending in this month.', 'addTx', 'Add an expense')}</div>`;
+}
 const insRow = i => `<div class="ins"><i>${{ good:'✅', warn:'⚠️', bad:'🔴', info:'💡' }[i.tone] || '💡'}</i><div>${esc(i.text)}</div></div>`;
 function remRow(r) {
   const ic = { card:'💳', loan:'🏦', rent:'🏠', utility:'💡', subscription:'🔁', savings:'🎯', bill:'🧾' }[r.kind] || '🧾';
@@ -1946,6 +1966,8 @@ function installHelp() {
 }
 
 const ACT = {
+  catAll: () => { V.catAll = !V.catAll; render(); },
+  catDrill: d => { V.money = { ...V.money, tab:'expense', cat: d.cat, range:'month', q:'', acct:'' }; go('money'); },
   syncCard: d => { const c = S.cards.find(x => x.id === d.id); const ci = cardInfo(S, ledger(S), c); const target = (+c.limit || 0) - c.bankAvail.amount; const delta = r2(target - ci.bal);
     confirmBox(`Set the ${c.bank} ${c.name} balance to ${fmt(target)} so available credit matches your bank (${fmt(c.bankAvail.amount)})? This adjusts the opening balance by ${fmt(delta, { sign:true })}; your transactions stay as they are.`, () => { c.opening = r2((+c.opening || 0) + delta); commit('Card balance matched to bank'); }, 'Match bank'); },
   smsFile: () => $('#smsfile').click(), smsMore: () => { SMSV.show = (SMSV.show || 100) + 100; render(); },
