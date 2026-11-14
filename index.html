@@ -234,7 +234,8 @@ body::before{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none
 @keyframes wiggle{0%,90%,100%{transform:rotate(0)}92%{transform:rotate(14deg)}94%{transform:rotate(-12deg)}96%{transform:rotate(8deg)}98%{transform:rotate(-4deg)}}
 /* scrollbars */
 *::-webkit-scrollbar{width:10px;height:8px}*::-webkit-scrollbar-thumb{background:var(--line);border-radius:9px;border:2px solid transparent;background-clip:padding-box}
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+html[data-motion=off] *,html[data-motion=off] *::before,html[data-motion=off] *::after{animation:none!important;transition:none!important}
+@media (prefers-reduced-motion:reduce){html[data-motion=auto] *,html[data-motion=auto] *::before,html[data-motion=auto] *::after{animation:none!important;transition:none!important}}
 @media (max-width:860px){.panel{backdrop-filter:none;-webkit-backdrop-filter:none;background:linear-gradient(180deg,color-mix(in srgb,var(--card) 94%,#fff 3%),var(--card))}}
 
 @media (display-mode: standalone){body{-webkit-user-select:none;user-select:none;overscroll-behavior-y:none}input,textarea{-webkit-user-select:text;user-select:text}}
@@ -1368,7 +1369,7 @@ function legend(labels, colors) { return `<div class="legend">${labels.map((l, i
 /* ---------- shell ---------- */
 function shell() {
   const nav = PAGES.map(([k, l]) => `<button class="nav" data-act="go" data-p="${k}" id="nav_${k}">${ico(k)}<span>${l}</span>${k==='alerts' ? '<span class="cnt" id="navcnt" hidden></span>' : k==='subs' ? '<span class="cnt" id="subcnt" hidden></span>' : ''}</button>`).join('');
-  document.body.innerHTML = `<div class="app"><aside class="side"><div class="brand"><div class="logo">D</div><span>Dirham<span style="color:var(--acc2)">Wise</span></span></div>${nav}<div class="sidefoot">Your private finance workspace</div></aside>
+  document.body.innerHTML = `<div class="app"><aside class="side"><div class="brand"><div class="logo">D</div><span>Dirham<span style="color:var(--acc2)">Wise</span></span></div>${nav}<div class="sidefoot">Your private finance workspace · v${APP_VERSION}</div></aside>
   <div class="main"><header class="top"><h1 id="ptitle"></h1><span class="sp"></span><div id="mpick"></div><span class="pill hide-m" id="sync"></span>
   <select class="inp hide-m" id="curSel" style="width:auto;padding:7px 9px" aria-label="Currency">${Object.keys(CURRENCIES).map(c => `<option ${c===curCode()?'selected':''}>${c}</option>`).join('')}</select>
   <button class="icon-btn" data-act="go" data-p="alerts" aria-label="Reminders">${ico('alerts')}<span class="dot" id="bell" hidden></span></button>
@@ -1380,6 +1381,7 @@ function shell() {
   setSync(PST.status || (PST.mode === 'cloud' ? 'Saved' : 'Saved on this device'), PST.mode === 'cloud' ? 'ok' : 'loc');
 }
 function applyTheme() {
+  applyMotion();
   const t = S?.settings.theme === 'auto' || !S ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : S.settings.theme;
   document.documentElement.dataset.theme = t; const b = $('#themeBtn'); if (b) b.innerHTML = ico(t === 'dark' ? 'sun' : 'moon');
 }
@@ -1405,10 +1407,14 @@ function render() {
 function go(p) { V.enter = true; V.page = p; try { if (location.hash !== '#' + p) history.replaceState(null, '', '#' + p); } catch(e) {} render(); window.scrollTo(0, 0); }
 
 /* ---------- motion helpers ---------- */
+const APP_VERSION = '2026.11.15-b';
+function motionMode() { return (S && S.settings.motion) || 'full'; }
+function noMotion() { const m = motionMode(); return m === 'off' || (m === 'auto' && matchMedia('(prefers-reduced-motion: reduce)').matches); }
+function applyMotion() { document.documentElement.dataset.motion = motionMode(); }
 V.nums = {};
 function afterRender() {
   requestAnimationFrame(() => $$('.ring[data-p]').forEach(r => r.style.setProperty('--p', r.dataset.p)));
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduce = noMotion();
   $$('.num').forEach((el, i) => {
     const key = V.page + ':' + i, to = +el.dataset.v, sign = el.dataset.sign === '1';
     const from = V.entering ? 0 : (V.nums[key] ?? to); V.nums[key] = to;
@@ -1429,7 +1435,7 @@ function checkCelebrations() {
   V.celebrated = { g: done, l: paid };
 }
 function confetti() {
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (noMotion()) return;
   const c = document.createElement('canvas'); c.id = 'confetti'; c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio; document.body.appendChild(c);
   const x = c.getContext('2d'); x.scale(devicePixelRatio, devicePixelRatio); const cols = ['#7C6CFF','#22D3EE','#F59E0B','#22C55E','#F43F5E','#E879F9'];
   const P = Array.from({ length: 140 }, () => ({ x: innerWidth / 2, y: innerHeight * 0.35, vx: (Math.random() - .5) * 14, vy: -Math.random() * 13 - 4, r: Math.random() * 6 + 3, c: cols[Math.random() * cols.length | 0], a: Math.random() * 6, va: (Math.random() - .5) * .4 }));
@@ -1440,7 +1446,7 @@ function confetti() {
   requestAnimationFrame(f);
 }
 document.addEventListener('pointerdown', e => {
-  const el = e.target.closest('.btn,.chip,.nav,.bnav button,.icon-btn,.tabs button,.seg button,.fab'); if (!el || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const el = e.target.closest('.btn,.chip,.nav,.bnav button,.icon-btn,.tabs button,.seg button,.fab'); if (!el || noMotion()) return;
   const r = el.getBoundingClientRect(), d = Math.max(r.width, r.height) * 2.2; const sp = document.createElement('span'); sp.className = 'ripple';
   sp.style.cssText = `width:${d}px;height:${d}px;left:${e.clientX - r.left - d / 2}px;top:${e.clientY - r.top - d / 2}px`; el.appendChild(sp); setTimeout(() => sp.remove(), 650);
 });
@@ -2084,6 +2090,7 @@ PAGE.settings = () => {
     <div class="frow"><div class="fld"><label>Display currency</label><select class="inp sset" data-k="currency">${Object.keys(CURRENCIES).map(c => `<option ${c===st.currency?'selected':''}>${c}</option>`).join('')}</select></div><div class="fld"><label>Dirham symbol</label><select class="inp sset" data-k="symbol"><option value="AED" ${st.symbol!=='arabic'?'selected':''}>AED</option><option value="arabic" ${st.symbol==='arabic'?'selected':''}>د.إ</option></select></div></div>
     <div class="frow"><div class="fld"><label>Theme</label><select class="inp sset" data-k="theme">${[['auto','Match device'],['dark','Dark'],['light','Light']].map(([k,l]) => `<option value="${k}" ${st.theme===k?'selected':''}>${l}</option>`).join('')}</select></div><div class="fld"><label>Remind me (days before due)</label><input class="inp sset" data-k="remindDays" type="number" min="1" max="30" value="${st.remindDays}"></div></div>
     <div class="frow"><div class="fld"><label>Salary day</label><input class="inp sset" data-k="salaryDay" type="number" min="1" max="31" value="${st.salaryDay}"></div><div class="fld"><label>Budget month starts on</label><select class="inp sset" data-k="cycleDay"><option value="1" ${(st.cycleDay||1)==1?'selected':''}>1st (calendar month)</option>${Array.from({length:27},(_,i)=>i+2).map(d => `<option value="${d}" ${+st.cycleDay===d?'selected':''}>${d}${d===+st.salaryDay?' (salary day)':''}</option>`).join('')}</select><div class="hint">Many UAE residents budget from payday to payday.</div></div></div>
+    <div class="fld"><label>Animations</label><select class="inp sset" data-k="motion"><option value="full" ${motionMode()==='full'?'selected':''}>Full (always on)</option><option value="auto" ${motionMode()==='auto'?'selected':''}>Follow phone setting (off in battery saver / reduce motion)</option><option value="off" ${motionMode()==='off'?'selected':''}>Off</option></select></div>
     <div class="fld"><label class="chk"><input type="checkbox" class="sset" data-k="hijri" ${st.hijri?'checked':''}> Show Hijri dates on reminders</label></div>
     <div class="fld"><label class="chk"><input type="checkbox" class="sset" data-k="islamicEvents" ${st.islamicEvents?'checked':''}> Islamic calendar reminders (Ramadan, Eid)</label></div>
     <div class="ph" style="margin-top:18px"><h3>Exchange rates</h3><span class="sp"></span><small>AED per 1 unit</small></div><div class="hint" style="margin:-8px 0 10px">AED is pegged to USD at 3.6725. Update the others when you need exact conversions; they are used for display and for foreign-currency investments.</div>
@@ -2097,7 +2104,7 @@ PAGE.settings = () => {
     <div class="hint">Cards and accounts matched by last 4 digits: ${S.cards.filter(c => c.last4).length + S.accounts.filter(a => a.last4).length} of ${S.cards.length + S.accounts.length}. ${Object.keys(S.merchantMap || {}).length ? `Learned categories for ${Object.keys(S.merchantMap).length} merchants.` : ''}</div></div>
   ${IS_PWA ? `<div class="panel" style="margin-bottom:16px"><div class="ph"><h3>App</h3></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px">${lockHash() ? '<button class="btn" data-act="setPin">Change PIN</button><button class="btn danger" data-act="removePin">Remove PIN lock</button>' : '<button class="btn pri" data-act="setPin">Set a PIN lock</button>'}${!isStandalone() ? '<button class="btn" data-act="install">Install on this device</button>' : ''}</div>
-    <div class="hint" style="margin-top:8px">${isStandalone() ? 'Running as an installed app.' : 'Install to get a home-screen icon, full-screen view and offline use.'}${PST.persisted ? ' Storage is protected from automatic clean-up.' : ''}</div></div>` : ''}
+    <div class="hint" style="margin-top:8px">Version ${APP_VERSION} · ${isStandalone() ? 'Running as an installed app.' : 'Install to get a home-screen icon, full-screen view and offline use.'}${PST.persisted ? ' Storage is protected from automatic clean-up.' : ''}</div></div>` : ''}
   <div class="panel"><div class="ph"><h3>How the numbers work</h3></div><div class="mut" style="line-height:1.6;font-size:13px">
     • Net cash flow = income − expenses (purchases incl. card spend, plus loan EMIs).<br>• Savings rate = (income − expenses) ÷ income × 100.<br>• Net worth = assets (cash, savings, goals, investments) − liabilities (cards, loans).<br>• Credit utilisation = card balances ÷ total limits × 100.<br>• Weighted average price = total cost ÷ total quantity.<br>• Budget remaining = limit (+ carried amount) − spending.<br>• Debt-to-income = (EMIs + card minimum payments) ÷ monthly income × 100.<br>• Card bill payments, transfers, goal contributions and investment trades are never counted as expenses.</div></div></div></div>`;
 };
@@ -2193,7 +2200,11 @@ matchMedia('(prefers-color-scheme: light)').addEventListener?.('change', () => {
 async function boot() {
   applyTheme();
   if (IS_PWA) {
-    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+      const hadController = !!navigator.serviceWorker.controller; let reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded && !/[?&](sms|text|title)=/.test(location.search)) { reloaded = true; location.reload(); } });
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => { r.update().catch(() => {}); document.addEventListener('visibilitychange', () => { if (!document.hidden) r.update().catch(() => {}); }); }).catch(() => {});
+    }
     try { PST.persisted = await navigator.storage?.persist?.(); } catch(e) {}
     if (lockHash()) { await new Promise(res => pinScreen(res)); }
     let hidden = 0; document.addEventListener('visibilitychange', () => { if (document.hidden) hidden = Date.now(); else if (lockHash() && hidden && Date.now() - hidden > 120000 && S) { const keep = location.hash; pinScreen(() => { shell(); render(); location.hash = keep; }); } });
