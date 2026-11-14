@@ -288,7 +288,7 @@ const fmtPlain = v => 'AED ' + (+v).toLocaleString('en-US', { maximumFractionDig
 
 /* ---- Ledger: balances as of a date ---- */
 function ledger(S, upTo = null) {
-  upTo = upTo || '9999-12-31';
+  upTo = upTo || todayISO(); // future-dated (scheduled) transactions don't change today's balances
   const acc = {}, card = {}, cashback = {}, loan = {}, loanInt = {}, goal = {}, hold = {};
   const meta = { acc:{}, card:{}, loan:{}, goal:{} };
   for (const a of S.accounts) { acc[a.id] = +a.opening||0; meta.acc[a.id] = a.asOf || '0000-01-01'; }
@@ -368,15 +368,19 @@ function ledger(S, upTo = null) {
 /* ---- Monthly aggregation (P&L view). Only income & expense & loan EMI count. ---- */
 function isExpenseTx(t) { return t.type === 'expense' || t.type === 'loan_payment'; }
 function expCat(t) { return t.type === 'loan_payment' ? 'Loan EMI' : (t.category || 'Other'); }
-function periodAgg(S, from, to) { // inclusive ISO
+function periodAgg(S, from, to) { // inclusive ISO; only what has happened up to today counts
   let income = 0, expense = 0, cardSpend = 0; const byCat = {}, incByCat = {};
+  let pendingIncome = 0, pendingExpense = 0; const pending = []; const today = todayISO();
   for (const t of S.tx) {
     if (t.date < from || t.date > to) continue;
+    if (t.date > today) { if (t.type === 'income') pendingIncome += +t.amount; else if (isExpenseTx(t)) pendingExpense += +t.amount; if (t.type === 'income' || isExpenseTx(t)) pending.push(t); continue; }
     if (t.type === 'income') { income += +t.amount; incByCat[t.category||'Other Income'] = (incByCat[t.category||'Other Income']||0) + +t.amount; }
     else if (isExpenseTx(t)) { expense += +t.amount; const c = expCat(t); byCat[c] = (byCat[c]||0) + +t.amount; if (t.cardId) cardSpend += +t.amount; }
   }
   const net = income - expense;
-  return { income, expense, net, savingsRate: income > 0 ? net / income * 100 : 0, byCat, incByCat, cardSpend };
+  pending.sort((a,b) => a.date.localeCompare(b.date));
+  return { income, expense, net, savingsRate: income > 0 ? net / income * 100 : 0, byCat, incByCat, cardSpend, pendingIncome, pendingExpense, pending,
+    nextIncome: pending.find(t => t.type === 'income') || null, projectedNet: net + pendingIncome - pendingExpense, inProgress: today >= from && today < to };
 }
 let _cycleDay = 1; const setCycleDay = d => { _cycleDay = clamp(+d||1, 1, 28); };
 const monthRange = ym => _cycleDay === 1 ? [ym + '-01', dateOn(ym, 31)] : [dateOn(ymAdd(ym,-1), _cycleDay), addDays(dateOn(ym, _cycleDay), -1)];
@@ -1118,7 +1122,7 @@ function txSub(t) {
     : t.type === 'loan_payment' ? `${accName(t.accountId)} → ${loanName(t.loanId)}` : t.type === 'goal_contribution' ? `${accName(t.accountId)} → ${goalName(t.goalId)}`
     : t.type === 'goal_withdraw' ? `${goalName(t.goalId)} → ${accName(t.accountId)}` : t.type.startsWith('invest') ? `${t.qty} × ${assetName(t.assetId)} · ${accName(t.accountId)}` : '';
   const cat = t.type === 'expense' || t.type === 'income' ? t.category : TX_TYPES[t.type];
-  return `${dshort(t.date)} · ${esc(cat)}${t.refund ? ' refund' : ''} · ${esc(via)}${t.source === 'sms' ? ' · 📩 SMS' : ''}${t.recurring ? ' · 🔁 ' + t.recurring : ''}${t.auto ? ' · auto' : ''}`;
+  return `${t.date > todayISO() ? '<span class="tag info">Scheduled</span> ' : ''}${dshort(t.date)} · ${esc(cat)}${t.refund ? ' refund' : ''} · ${esc(via)}${t.source === 'sms' ? ' · 📩 SMS' : ''}${t.recurring ? ' · 🔁 ' + t.recurring : ''}${t.auto ? ' · auto' : ''}`;
 }
 function txSign(t) { return t.type === 'income' || t.type === 'invest_sell' || t.type === 'goal_withdraw' ? 1 : t.type === 'transfer' ? 0 : -1; }
 function txRow(t) {
@@ -1258,16 +1262,16 @@ PAGE.dashboard = L => {
   return `<div class="grid g3" style="margin-bottom:16px">
     <div class="panel hero span2"><div class="mut" style="font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase">Net worth</div><div class="big">${fmt(L.netWorth)}</div>
       <div class="mut">${L.netWorth - prevNW >= 0 ? '<span class="up">▲' : '<span class="down">▼'} ${fmt(Math.abs(L.netWorth - prevNW))}</span> since the start of ${esc(ymLong(ym).split(' ')[0])} cycle · assets ${fmt(L.assets)} · liabilities ${fmt(L.liabilities)}</div>
-      <div class="stats" style="margin-top:16px"><div class="stat"><span>Net cash flow</span><b class="${m.net >= 0 ? 'up' : 'down'}">${fmt(m.net, { sign:true })}</b></div><div class="stat"><span>Card utilisation</span><b>${pct(L.utilization,0)}</b></div><div class="stat"><span>Debt-to-income</span><b>${pct(dti(S, L, ym).ratio,0)}</b></div><div class="stat"><span>Emergency cover</span><b>${H.efMonths.toFixed(1)} months</b></div></div></div>
+      <div class="stats" style="margin-top:16px"><div class="stat"><span>${isCur ? 'Left over so far' : 'Net cash flow'}</span><b class="${m.net >= 0 ? 'up' : 'down'}">${fmt(m.net, { sign:true })}</b></div><div class="stat"><span>Card utilisation</span><b>${pct(L.utilization,0)}</b></div><div class="stat"><span>Debt-to-income</span><b>${pct(dti(S, L, ym).ratio,0)}</b></div><div class="stat"><span>Emergency cover</span><b>${H.efMonths.toFixed(1)} months</b></div></div></div>
     <div class="panel" style="display:flex;gap:16px;align-items:center"><div>${ring(H.score, `${H.score}<small>${H.label}</small>`, hc, 104)}</div><div style="flex:1;min-width:0"><div class="ph" style="margin-bottom:8px"><h3>Financial health</h3></div>${H.parts.map(p => `<div style="display:flex;justify-content:space-between;font-size:12px;margin:5px 0;gap:8px"><span class="mut">${p.k}</span><b>${esc(p.v)}</b></div>${bar(p.pts / p.max * 100, p.pts / p.max >= .7 ? 'ok' : p.pts / p.max >= .4 ? 'warn' : 'over')}`).join('')}</div></div></div>
   <div class="grid g4" style="margin-bottom:16px">
-    ${kpi('Monthly income', fmt(m.income), delta(m.income, pm.income) || (isCur ? 'Cycle to date' : ''), '💰', 'good')}
-    ${kpi('Monthly expenses', fmt(m.expense), delta(m.expense, pm.expense, true) || '', '💸', 'bad')}
+    ${kpi(isCur ? 'Income received' : 'Monthly income', fmt(m.income), m.pendingIncome ? `+${fmt(m.pendingIncome)} expected ${m.nextIncome ? dshort(m.nextIncome.date) : ''}` : (isCur ? 'This month so far' : delta(m.income, pm.income)), '💰', 'good')}
+    ${kpi(isCur ? 'Spent so far' : 'Monthly expenses', fmt(m.expense), delta(m.expense, pm.expense, true) || '', '💸', 'bad')}
     ${kpi('Available balance', fmt(L.cash), `${S.accounts.filter(a => a.type !== 'savings').length} cash & bank accounts`, '🏦', 'info')}
     ${kpi('Total savings', fmt(L.totalSavings), `Goals ${fmt(L.goals)} · savings a/c ${fmt(L.savingsAcc)}`, '🎯', 'acc')}
     ${kpi('Outstanding debt', fmt(L.debt), `Cards ${fmt(L.cardDebt)} · loans ${fmt(L.loanDebt)}`, '📉', 'warn')}
     ${kpi('Investments', fmt(L.invValue), `<span class="${L.invValue - L.invCost >= 0 ? 'up' : 'down'}">${fmt(L.invValue - L.invCost, { sign:true })}</span> unrealised`, '📈', 'acc2')}
-    ${kpi('Savings rate', m.income ? pct(m.savingsRate) : '—', m.income ? `${fmt(m.net)} kept this month` : 'No income recorded yet', '🐷', m.savingsRate >= 20 ? 'good' : 'warn')}
+    ${kpi('Savings rate', m.income && !(isCur && m.pendingIncome) ? pct(m.savingsRate) : '—', m.income && !(isCur && m.pendingIncome) ? `${fmt(m.net)} kept${isCur ? ' so far' : ''}` : m.pendingIncome ? `Shown after income arrives ${m.nextIncome ? dshort(m.nextIncome.date) : ''}` : 'No income recorded yet', '🐷', m.savingsRate >= 20 ? 'good' : 'warn')}
     ${kpi('Budget utilisation', B.rows.length ? pct(B.utilization, 0) : '—', B.rows.length ? `${fmt(B.totSpent)} of ${fmt(B.totLimit)}` : 'No budgets set', '🧮', B.utilization > 100 ? 'bad' : B.utilization > 80 ? 'warn' : 'good')}
   </div>
   <div class="grid g3" style="margin-bottom:16px">
@@ -1346,7 +1350,7 @@ PAGE.money = L => {
     <div class="ph" style="margin:14px 0 8px"><h3>Possible unnecessary spending</h3></div>${flags.length ? flags.map(f => `<div class="ins"><i>🔎</i><div>${esc(f.text)} — <b>${fmt(f.amount)}</b>${f.base ? ` <span class="mut">(avg ${fmt(f.base)})</span>` : ''}</div></div>`).join('') : '<div class="mut" style="font-size:13px">Nothing unusual this month compared with your 3-month average.</div>'}</div></div>`;
   }
   return `<div class="toolbar"><div class="tabs">${[['all','All'],['income','Income'],['expense','Expenses'],['moves','Transfers & payments'],['recurring','Recurring']].map(([k,l]) => `<button class="${M.tab===k?'on':''}" data-act="mtab" data-v="${k}">${l}</button>`).join('')}</div><span style="flex:1"></span><button class="btn" data-act="go" data-p="sms">📩 Import SMS</button><button class="btn pri" data-act="addTx" data-type="${M.tab==='income'?'income':'expense'}">+ ${M.tab==='income'?'Add income':'Add expense'}</button></div>
-  <div class="grid g3" style="margin-bottom:16px">${kpi('Income', fmt(agg.income), esc(rangeLabel()), '⬆️', 'good')}${kpi('Expenses', fmt(agg.expense), `incl. ${fmt(agg.cardSpend)} on cards`, '⬇️', 'bad')}${kpi('Net', `<span class="${agg.net>=0?'up':'down'}">${fmt(agg.net,{sign:true})}</span>`, agg.income ? `Savings rate ${pct(agg.savingsRate)}` : '', '⚖️')}</div>
+  <div class="grid g3" style="margin-bottom:16px">${netKpis(agg, rangeLabel())}</div>
   ${extra}
   <div class="panel"><div class="toolbar"><input class="inp" id="mq" placeholder="Search transactions…" value="${esc(M.q)}" style="flex:1;min-width:160px">
     <select class="inp" id="mrange">${[['month','This month'],['last','Last month'],['90','Last 90 days'],['year','This year'],['all','All time']].map(([k,l]) => `<option value="${k}" ${M.range===k?'selected':''}>${l}</option>`).join('')}</select>
@@ -1355,6 +1359,15 @@ PAGE.money = L => {
     <div class="mut" style="font-size:12px;margin-bottom:6px">${list.length} transaction${list.length===1?'':'s'}${M.tab==='recurring' ? ' · templates that repeat automatically' : ''}</div>
     ${shown.length ? `<div class="list">${shown.map(txRow).join('')}</div>${list.length > shown.length ? `<div style="text-align:center;margin-top:10px"><button class="btn" data-act="moreTx">Show more</button></div>` : ''}` : empty('No transactions match these filters.')}</div>`;
 };
+function netKpis(agg, label) {
+  const ni = agg.nextIncome; const exp = agg.pendingIncome ? `+${fmt(agg.pendingIncome)} expected${ni ? ` · ${esc(ni.payee || ni.category)} ${dshort(ni.date)}` : ''}` : esc(label);
+  const so = agg.inProgress ? ' so far' : '';
+  const netSub = agg.pendingIncome || agg.pendingExpense
+    ? `After scheduled items: <b class="${agg.projectedNet >= 0 ? 'up' : 'down'}">${fmt(agg.projectedNet, { sign:true })}</b>`
+    : agg.income ? `Kept ${pct(agg.savingsRate, 0)} of income${so}` : 'No income received yet';
+  return kpi('Received' + so, fmt(agg.income), exp, '⬆️', 'good') + kpi('Spent' + so, fmt(agg.expense), `${fmt(agg.cardSpend)} of it on credit cards`, '⬇️', 'bad')
+    + kpi('Left over' + so, `<span class="${agg.net >= 0 ? 'up' : 'down'}">${fmt(agg.net, { sign:true })}</span>`, netSub, '⚖️');
+}
 const rangeLabel = () => ({ month: cycleLabel(V.ym), last: cycleLabel(ymAdd(V.ym,-1)), '90':'Last 90 days', year: V.ym.slice(0,4), all:'All time' })[V.money.range];
 PAGE_AFTER.money = () => {
   const q = $('#mq'); if (q) { q.oninput = () => { V.money.q = q.value; const pos = q.selectionStart; render(); const n = $('#mq'); n.focus(); n.setSelectionRange(pos, pos); }; }
