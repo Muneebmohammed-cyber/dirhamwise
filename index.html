@@ -776,7 +776,7 @@ function cleanMerchant(m) {
   return (m || '').replace(/\s{2,}/g, ' ').replace(/\b(on|dated|at)\s*$/i, '').replace(/[\s,.;:-]+$/, '').replace(/^\s*(merchant|at)\s*:?\s*/i, '').trim().slice(0, 60);
 }
 /* Returns { ok, kind, amount, currency, aed, last4, merchant, date, category, reason, confidence } */
-function parseSMS(S, raw, today = todayISO()) {
+function parseSMS(S, raw, today = todayISO(), whenSent = null) {
   const text = String(raw || '').replace(/\s+/g, ' ').trim(); const low = text.toLowerCase();
   const out = { text, hash: smsHash(text), ok: false };
   if (!text) return { ...out, reason: 'Empty message' };
@@ -815,7 +815,7 @@ function parseSMS(S, raw, today = todayISO()) {
   const pref = cands.find(m => /^(at|@|merchant)/i.test(m[1])) || cands.find(m => /^from$/i.test(m[1])) || cands[0];
   const mer = pref ? [null, pref[2]] : null;
   out.merchant = cleanMerchant(mer ? mer[1] : '') || ({ salary:'Salary', atm:'ATM withdrawal', card_payment:'Card payment', refund:'Refund', income:'Money received' })[out.kind] || 'Card purchase';
-  out.date = smsDate(text, today); if (out.date > today) out.date = today;
+  out.date = smsDate(text, whenSent || today); if (out.date > today) out.date = whenSent && whenSent <= today ? whenSent : today;
   out.category = out.kind === 'purchase' ? guessCategory(S, out.merchant, text) : out.kind === 'salary' ? 'Salary' : out.kind === 'refund' ? guessCategory(S, out.merchant, text) : out.kind === 'income' ? 'Other Income' : '';
   // Resolve card/account by last 4
   const card = out.last4 && S.cards.find(c => String(c.last4 || '') === out.last4);
@@ -826,6 +826,49 @@ function parseSMS(S, raw, today = todayISO()) {
   out.confidence = (out.cardId || out.accountId ? 1 : 0) + (out.merchant && !/^(Card purchase)$/.test(out.merchant) ? 1 : 0) + (out.aed ? 1 : 0);
   out.ok = true; return out;
 }
+/* Split pasted text holding several SMS into single messages */
+const AMT_RE = /(?:AED|USD|EUR|GBP|SAR|INR|Dhs?)\.?\s?[\d,]+(?:\.\d{1,2})?|[\d,]+(?:\.\d{1,2})?\s?(?:AED|USD)\b/i;
+const START_RE = /(?=\b(?:Purchase of|Dear (?:Customer|Card ?member|Client)|Your (?:[A-Z][\w ]{0,30})?(?:Credit|Debit|Prepaid|ADCB|FAB|ENBD|Mashreq|RAKBANK|ADIB|DIB|CBD|HSBC)?\s*(?:Card|A\/C|account)|Transaction of|Txn of|Payment of|Refund of|AED [\d,.]+ (?:spent|debited|withdrawn|credited)|Salary of|Thank you for (?:using|your payment)|Cash withdrawal|An amount of|A purchase of|Debit card|Credit card)\b)/g;
+function splitSMSText(raw) {
+  let t = String(raw || '').replace(/\r/g, '').trim(); if (!t) return [];
+  // drop timestamps/sender headers that messaging apps add when copying several messages
+  t = t.replace(/^\s*\[?\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AP]M)?\]?\s*[^:\n]{0,40}:\s*/gim, '\n\n');
+  let parts = t.split(/\n\s*\n+/).map(x => x.trim()).filter(Boolean);
+  const out = [];
+  for (const part of parts) {
+    const lines = part.split('\n').map(l => l.trim()).filter(Boolean);
+    const linesWithAmt = lines.filter(l => AMT_RE.test(l));
+    if (lines.length > 1 && linesWithAmt.length === lines.length) { out.push(...lines); continue; }
+    // several messages glued together: split before typical first words, then merge pieces with no amount into the previous one
+    const pieces = part.replace(/\n/g, ' ').split(START_RE).map(x => x.trim()).filter(Boolean);
+    const merged = [];
+    for (const pc of pieces) { const prev = merged[merged.length - 1]; if (prev && (!AMT_RE.test(pc) || !AMT_RE.test(prev))) merged[merged.length - 1] = prev + ' ' + pc; else merged.push(pc); }
+    out.push(...merged);
+  }
+  return out;
+}
+/* SMS backup files: "SMS Backup & Restore" XML, or CSV/TXT exports */
+function parseSMSFile(name, content) {
+  const msgs = []; const lower = name.toLowerCase();
+  if (lower.endsWith('.xml') || /<smses|<sms /.test(content.slice(0, 2000))) {
+    const re = /<sms\b([^>]*)\/?>/g; let m;
+    const attr = (s, k) => { const r = s.match(new RegExp('\\b' + k + '="([^"]*)"')); return r ? r[1].replace(/&#10;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)) : ''; };
+    while ((m = re.exec(content))) { const a = m[1]; if (attr(a, 'type') && attr(a, 'type') !== '1') continue; const ms = +attr(a, 'date'); msgs.push({ text: attr(a, 'body'), from: attr(a, 'address'), date: ms ? iso(new Date(ms)) : null }); }
+    return msgs;
+  }
+  if (lower.endsWith('.csv')) {
+    const rows = csvRows(content); const head = (rows[0] || []).map(h => h.toLowerCase());
+    const bi = head.findIndex(h => /body|message|text|content/.test(h)); const fi = head.findIndex(h => /address|from|sender|number/.test(h)); const di = head.findIndex(h => /date|time/.test(h));
+    if (bi >= 0) { for (const r of rows.slice(1)) { const d = di >= 0 ? new Date(isNaN(r[di]) ? r[di] : +r[di]) : null; msgs.push({ text: r[bi] || '', from: fi >= 0 ? r[fi] : '', date: d && !isNaN(d) ? iso(d) : null }); } return msgs; }
+  }
+  return splitSMSText(content).map(text => ({ text, from: '', date: null }));
+}
+function csvRows(s) { const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < s.length; i++) { const ch = s[i];
+    if (q) { if (ch === '"' && s[i+1] === '"') { cell += '"'; i++; } else if (ch === '"') q = false; else cell += ch; }
+    else if (ch === '"') q = true; else if (ch === ',') { row.push(cell); cell = ''; } else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; } else if (ch !== '\r') cell += ch; }
+  if (cell || row.length) { row.push(cell); rows.push(row); } return rows; }
+
 /* Turn a parsed SMS into a transaction (or a match to an existing one). */
 function smsToTx(S, p, opts = {}) {
   const base = { id: uid(), created: Date.now(), date: p.date, amount: p.aed, payee: p.merchant, notes: opts.keepText === false ? '' : `SMS: ${p.text.slice(0, 160)}`, sms: p.hash, source: 'sms' };
@@ -868,7 +911,7 @@ function applySMS(S, p, overrides = {}) {
   S.tx.push(t); return { status:'added', tx: t };
 }
 
-if (false) module.exports = { parseSMS, applySMS, smsDuplicate, smsToTx, smsHash, guessCategory };
+if (false) module.exports = { splitSMSText, parseSMSFile, parseSMS, applySMS, smsDuplicate, smsToTx, smsHash, guessCategory };
 </script>
 <script>/* ===== UI layer ===== */
 let S = null;                       // app state
@@ -1381,22 +1424,43 @@ PAGE_AFTER.money = () => {
 
 /* --- Bank SMS import --- */
 const SMSV = { text:'', items:[] };
-function splitMessages(raw) {
-  const t = String(raw || '').replace(/\r/g, '').trim(); if (!t) return [];
-  let parts = t.split(/\n\s*\n+/);
-  if (parts.length === 1) { const lines = t.split('\n').filter(l => l.trim()); const withAmt = lines.filter(l => /(AED|USD|EUR|GBP|SAR|Dhs?)\.?\s?[\d,]+|[\d,]+(\.\d+)?\s?(AED|USD)/i.test(l)); if (lines.length > 1 && withAmt.length === lines.length) parts = lines; }
-  return parts.map(x => x.trim()).filter(Boolean);
+function smsBuild(list) { // list of {text, date}
+  const seen = new Set(); SMSV.items = []; SMSV.ignored = 0; SMSV.show = 100;
+  for (const m of list) { const key = smsHash(m.text); if (seen.has(key)) continue; seen.add(key);
+    if (!AMT_RE.test(m.text)) { SMSV.ignored++; continue; }
+    if (SMSV.since && m.date && m.date < SMSV.since) { SMSV.ignored++; continue; }
+    const p = parseSMS(S, m.text, todayISO(), m.date); if (m.date) p.whenSent = m.date; const dup = p.ok ? smsDuplicate(S, p) : null;
+    SMSV.items.push({ p, dup, from: m.from, on: p.ok && dup?.type !== 'same' && dup?.type !== 'manual' }); }
+  SMSV.items.sort((a, b) => (b.p.date || '').localeCompare(a.p.date || ''));
 }
-function smsAnalyse(raw) { SMSV.text = raw; SMSV.items = splitMessages(raw).map(m => { const p = parseSMS(S, m); const dup = p.ok ? smsDuplicate(S, p) : null; return { p, dup, on: p.ok && dup?.type !== 'same' && dup?.type !== 'manual' }; }); }
+function smsAnalyse(raw) { SMSV.text = raw; smsBuild(splitSMSText(raw).map(text => ({ text, date: null }))); }
+function smsReanalyse() { // after linking cards: re-parse keeping user choices
+  for (const x of SMSV.items) { const keepCat = x.userCat ? x.p.category : null; const p = parseSMS(S, x.p.text, todayISO(), x.p.whenSent || null); if (keepCat) p.category = keepCat; if (x.p.whenSent) p.whenSent = x.p.whenSent; x.p = p; x.dup = p.ok ? smsDuplicate(S, p) : null; x.on = x.on && p.ok && x.dup?.type !== 'same'; }
+}
+function smsSummary() {
+  const it = SMSV.items, ok = it.filter(x => x.p.ok), sel = it.filter(x => x.on);
+  const dups = it.filter(x => x.dup && (x.dup.type === 'same' || x.dup.type === 'manual')).length, skipped = it.length - ok.length;
+  const spend = sum(sel.filter(x => x.p.kind === 'purchase').map(x => x.p.aed || 0));
+  const unmatched = {}; for (const x of ok) if ((x.p.kind === 'purchase' || x.p.kind === 'refund') && !x.p.cardId && !x.p.accountId) { const k = x.p.last4 || 'none'; unmatched[k] = (unmatched[k] || 0) + 1; }
+  const linkOpts = `<option value="">Link to…</option>${S.cards.map(c => `<option value="card:${c.id}">💳 ${esc(c.bank + ' ' + c.name)}</option>`).join('')}${S.accounts.map(a => `<option value="acc:${a.id}">🏦 ${esc(a.name)}</option>`).join('')}`;
+  return `<div class="stats" style="margin-bottom:12px"><div class="stat"><span>Messages found</span><b>${it.length}</b></div><div class="stat"><span>Selected</span><b>${sel.length}</b></div><div class="stat"><span>Purchases selected</span><b>${fmt(spend)}</b></div><div class="stat"><span>Already recorded / skipped</span><b>${dups} / ${skipped}${SMSV.ignored ? ` <span class="mut" style="font-size:11px">(+${SMSV.ignored} non-money)</span>` : ''}</b></div></div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"><button class="btn sm" data-act="smsAll" data-v="1">Select all</button><button class="btn sm" data-act="smsAll" data-v="0">Select none</button>
+    <select class="inp" id="smsbulkcat" style="width:auto;padding:5px 8px"><option value="">Set category for selected…</option>${EXP_CATS.map(c => `<option>${c}</option>`).join('')}</select></div>
+  ${Object.keys(unmatched).length ? `<div class="ins"><i>💳</i><div style="flex:1"><b>Unmatched cards</b> — link each ending once and it's remembered for future SMS:${Object.entries(unmatched).map(([k, n]) => `<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><span style="min-width:110px">${k === 'none' ? 'No card number' : 'Ending ' + esc(k)} (${n})</span><select class="inp smslink" data-l4="${esc(k)}" style="padding:5px 8px">${linkOpts}</select></div>`).join('')}</div></div>` : ''}`;
+}
 const KIND_LBL = { purchase:'Purchase', refund:'Refund', card_payment:'Card bill payment', salary:'Salary', income:'Money received', atm:'ATM withdrawal' };
 PAGE.sms = () => {
   const payOpts = sel => `<option value="">Choose card / account…</option>${S.cards.map(c => `<option value="card:${c.id}" ${sel === 'card:' + c.id ? 'selected' : ''}>💳 ${esc(c.bank + ' ' + c.name)}${c.last4 ? ' ··' + c.last4 : ''}</option>`).join('')}${S.accounts.map(a => `<option value="acc:${a.id}" ${sel === 'acc:' + a.id ? 'selected' : ''}>🏦 ${esc(a.name)}${a.last4 ? ' ··' + a.last4 : ''}</option>`).join('')}`;
   const ready = SMSV.items.filter(x => x.on).length;
   return `<div class="grid g3"><div class="span2"><div class="panel" style="margin-bottom:16px"><div class="ph"><h3>📩 Import from bank SMS</h3><span class="sp"></span><button class="btn sm" data-act="smsPaste">Paste from clipboard</button></div>
-    <textarea class="inp" id="smsin" rows="6" placeholder="Paste one or more bank SMS here. Separate messages with a blank line.">${esc(SMSV.text)}</textarea>
-    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn pri" data-act="smsRead">Read messages</button>${SMSV.items.length ? '<button class="btn ghost" data-act="smsClear">Clear</button>' : ''}</div></div>
+    <textarea class="inp" id="smsin" rows="6" placeholder="Paste one or many bank SMS here: copy several messages at once in your Messages app and paste them all. Each message is detected automatically.">${esc(SMSV.text)}</textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><button class="btn pri" data-act="smsRead">Read messages</button><button class="btn" data-act="smsFile">📂 Import SMS backup file</button>${SMSV.items.length ? '<button class="btn ghost" data-act="smsClear">Clear</button>' : ''}</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px" class="mut">Only messages from <input type="date" class="inp" id="smssince" value="${esc(SMSV.since || '')}" style="width:auto;padding:5px 8px"> <span>onwards (optional)</span></div>
+    <input type="file" id="smsfile" accept=".xml,.csv,.txt,text/xml,text/csv,text/plain" hidden>
+    <div class="hint" style="margin-top:8px">Backup files: export your SMS with the free <b>SMS Backup &amp; Restore</b> app (XML), or any CSV/TXT export. Only bank money messages are picked up; personal chats are ignored and nothing leaves your phone.</div></div>
   ${SMSV.items.length ? `<div class="panel"><div class="ph"><h3>Review</h3><span class="sp"></span><button class="btn pri" data-act="smsImport" ${ready ? '' : 'disabled'}>Import ${ready} selected</button></div>
-    ${SMSV.items.map((x, i) => { const p = x.p; if (!p.ok) return `<div class="ins"><i>⏭️</i><div><b>Skipped:</b> ${esc(p.reason)}<div class="mut" style="font-size:12px;margin-top:4px">${esc(p.text.slice(0, 140))}</div></div></div>`;
+    ${smsSummary()}
+    ${SMSV.items.slice(0, SMSV.show || 100).map((x, i) => { const p = x.p; if (!p.ok) return `<div class="ins"><i>⏭️</i><div><b>Skipped:</b> ${esc(p.reason)}<div class="mut" style="font-size:12px;margin-top:4px">${esc(p.text.slice(0, 140))}</div></div></div>`;
       const sel = p.cardId ? 'card:' + p.cardId : p.accountId ? 'acc:' + p.accountId : '';
       return `<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--card2)"><div style="display:flex;gap:10px;align-items:flex-start"><input type="checkbox" class="smson" data-i="${i}" ${x.on ? 'checked' : ''} style="width:18px;height:18px;margin-top:3px;accent-color:var(--acc)"><div style="flex:1;min-width:0">
         <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.merchant)}</b><b class="${p.kind === 'purchase' ? '' : 'up'}">${p.kind === 'purchase' ? '−' : p.kind === 'card_payment' || p.kind === 'atm' ? '' : '+'}${p.aed ? fmt(p.aed) : esc(p.currency + ' ' + p.amount)}</b></div>
@@ -1404,11 +1468,20 @@ PAGE.sms = () => {
         <div class="frow" style="gap:8px">${p.kind === 'purchase' || p.kind === 'refund' ? `<select class="inp smscat" data-i="${i}">${EXP_CATS.map(c => `<option ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select>` : '<div></div>'}<select class="inp smspay" data-i="${i}">${payOpts(sel)}</select></div>
         ${!sel && (p.kind === 'purchase' || p.kind === 'refund') ? `<div class="hint warnc" style="margin-top:6px">No card or account with ending ${esc(p.last4 || '?')}. Choose one; add the last 4 digits to the card so it's automatic next time.</div>` : ''}
         ${x.dup ? `<div class="hint ${x.dup.type === 'sub' ? '' : 'warnc'}" style="margin-top:6px">${x.dup.type === 'sub' ? '🔁 ' : '⚠️ '}${esc(x.dup.text)}${x.dup.type === 'sub' ? ' — it will be confirmed, not added twice.' : ''}</div>` : ''}
-        ${p.warn ? `<div class="hint warnc">${esc(p.warn)}</div>` : ''}</div></div></div>`; }).join('')}</div>` : ''}</div>
+        ${p.warn ? `<div class="hint warnc">${esc(p.warn)}</div>` : ''}</div></div></div>`; }).join('')}
+    ${SMSV.items.length > (SMSV.show || 100) ? `<div style="text-align:center"><button class="btn" data-act="smsMore">Show ${Math.min(100, SMSV.items.length - SMSV.show)} more of ${SMSV.items.length - SMSV.show}</button></div>` : ''}
+    <div style="text-align:right;margin-top:10px"><button class="btn pri" data-act="smsImport" ${ready ? '' : 'disabled'}>Import ${ready} selected</button></div></div>` : ''}</div>
   <div class="panel"><div class="ph"><h3>Make it automatic</h3></div>${smsGuide()}</div></div>`;
 };
 PAGE_AFTER.sms = () => {
   const ta = $('#smsin'); ta.oninput = () => { SMSV.text = ta.value; };
+  $('#smssince').onchange = e => { SMSV.since = e.target.value || null; if (SMSV.items.length) { if (SMSV.lastFile) smsBuild(SMSV.lastFile); else smsAnalyse(SMSV.text); render(); } };
+  $('#smsfile').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { const txt = await f.text(); const list = parseSMSFile(f.name, txt); SMSV.lastFile = list; smsBuild(list); render(); toast(`Read ${list.length} messages from ${f.name}: ${SMSV.items.length} money messages found`, 'info', 5000); } catch(err) { toast('Could not read that file', 'bad'); } };
+  const bc = $('#smsbulkcat'); if (bc) bc.onchange = () => { if (!bc.value) return; let n = 0; for (const x of SMSV.items) if (x.on && (x.p.kind === 'purchase' || x.p.kind === 'refund')) { x.p.category = bc.value; x.userCat = true; n++; } render(); toast(`Category set on ${n} messages`, 'info'); };
+  $$('.smslink').forEach(el => el.onchange = () => { if (!el.value) return; const [k, id] = el.value.split(':'); const l4 = el.dataset.l4;
+    if (l4 !== 'none') { const o = k === 'card' ? S.cards.find(c => c.id === id) : S.accounts.find(a => a.id === id); o.last4 = l4; smsReanalyse(); scheduleSave(); toast(`Ending ${l4} linked to ${k === 'card' ? cardName(id) : accName(id)}`); }
+    else { for (const x of SMSV.items) if (x.p.ok && !x.p.cardId && !x.p.accountId && !x.p.last4) { if (k === 'card') x.p.cardId = id; else x.p.accountId = id; x.dup = smsDuplicate(S, x.p); } }
+    render(); });
   $$('.smson').forEach(el => el.onchange = () => { SMSV.items[+el.dataset.i].on = el.checked; render(); });
   $$('.smscat').forEach(el => el.onchange = () => { SMSV.items[+el.dataset.i].p.category = el.value; SMSV.items[+el.dataset.i].userCat = true; });
   $$('.smspay').forEach(el => el.onchange = () => { const x = SMSV.items[+el.dataset.i]; const [k, id] = el.value.split(':'); delete x.p.cardId; delete x.p.accountId; if (k === 'card') x.p.cardId = id; else if (k === 'acc') x.p.accountId = id; x.dup = smsDuplicate(S, x.p); render(); });
@@ -1439,6 +1512,7 @@ async function handleIncomingSMS() {
   const q = new URLSearchParams(location.search); let raw = q.get('sms') || [q.get('title'), q.get('text')].filter(Boolean).join(' ').trim();
   if (!raw) return;
   try { history.replaceState(null, '', location.pathname + location.hash); } catch(e) {}
+  if (splitSMSText(raw).length > 1) { smsAnalyse(raw); go('sms'); toast(`${SMSV.items.length} messages received — review and import`, 'info', 5000); return; }
   const p = parseSMS(S, raw); const dup = p.ok ? smsDuplicate(S, p) : null;
   if (p.ok && S.settings.smsAuto !== false && (p.cardId || p.accountId || ['card_payment','salary'].includes(p.kind)) && p.aed && (!dup || dup.type === 'sub' || dup.type === 'same')) {
     const r = applySMS(S, p); commit();
@@ -1874,11 +1948,13 @@ function installHelp() {
 const ACT = {
   syncCard: d => { const c = S.cards.find(x => x.id === d.id); const ci = cardInfo(S, ledger(S), c); const target = (+c.limit || 0) - c.bankAvail.amount; const delta = r2(target - ci.bal);
     confirmBox(`Set the ${c.bank} ${c.name} balance to ${fmt(target)} so available credit matches your bank (${fmt(c.bankAvail.amount)})? This adjusts the opening balance by ${fmt(delta, { sign:true })}; your transactions stay as they are.`, () => { c.opening = r2((+c.opening || 0) + delta); commit('Card balance matched to bank'); }, 'Match bank'); },
-  smsRead: () => { smsAnalyse($('#smsin').value); render(); if (!SMSV.items.length) toast('Paste at least one SMS', 'warn'); },
-  smsClear: () => { SMSV.text = ''; SMSV.items = []; render(); },
+  smsFile: () => $('#smsfile').click(), smsMore: () => { SMSV.show = (SMSV.show || 100) + 100; render(); },
+  smsAll: d => { for (const x of SMSV.items) x.on = d.v === '1' && x.p.ok && x.dup?.type !== 'same'; render(); },
+  smsRead: () => { SMSV.lastFile = null; smsAnalyse($('#smsin').value); render(); if (!SMSV.items.length) toast('Paste at least one SMS', 'warn'); },
+  smsClear: () => { SMSV.text = ''; SMSV.items = []; SMSV.lastFile = null; render(); },
   smsPaste: async () => { try { const t = await navigator.clipboard.readText(); smsAnalyse((SMSV.text ? SMSV.text + '\n\n' : '') + t); render(); } catch(e) { toast('Clipboard access was blocked. Long-press the box and paste instead.', 'warn'); } },
   smsImport: () => { const sel = SMSV.items.filter(x => x.on && x.p.ok); if (sel.some(x => (x.p.kind === 'purchase' || x.p.kind === 'refund') && !x.p.cardId && !x.p.accountId)) return toast('Choose a card or account for every selected message', 'bad');
-    const r = smsImportItems(sel); SMSV.text = ''; SMSV.items = []; commit(`Imported ${r.added}${r.merged ? `, confirmed ${r.merged} subscription charge${r.merged > 1 ? 's' : ''}` : ''}${r.skipped ? `, skipped ${r.skipped} duplicate${r.skipped > 1 ? 's' : ''}` : ''}`); go('money'); },
+    const r = smsImportItems(sel.sort((a, b) => (a.p.date || '').localeCompare(b.p.date || ''))); SMSV.text = ''; SMSV.items = []; SMSV.lastFile = null; commit(`Imported ${r.added}${r.merged ? `, confirmed ${r.merged} subscription charge${r.merged > 1 ? 's' : ''}` : ''}${r.skipped ? `, skipped ${r.skipped} duplicate${r.skipped > 1 ? 's' : ''}` : ''}`); go('money'); },
   copyLink: async () => { try { await navigator.clipboard.writeText(smsLink()); toast('Link copied'); } catch(e) { $('#smslink').select(); toast('Select and copy the link', 'warn'); } },
   addSub: () => subForm(), editSub: d => subForm(S.subs.find(x => x.id === d.id)), paySub: d => paySub(d.id),
   subStatus: d => { const s = S.subs.find(x => x.id === d.id); s.status = d.v; if (d.v === 'active' && s.next < todayISO()) { while (s.next < todayISO()) s.next = subAdvance(s.next, s.cycle); } commit(d.v === 'active' ? `${s.name} resumed` : `${s.name} paused`, 'info'); },
