@@ -159,7 +159,7 @@ function emptyState() {
   return {
     v: 1,
     settings: { cycleDay:1, currency:'AED', symbol:'AED', rates:{...DEFAULT_RATES}, theme:'auto', hijri:true, islamicEvents:true, remindDays:5, salaryDay:28, name:'' },
-    accounts: [], cards: [], loans: [], goals: [], assets: [], budgets: {}, bills: [], subs: [], tx: []
+    accounts: [], cards: [], loans: [], goals: [], assets: [], budgets: {}, bills: [], subs: [], merchantMap: {}, smsSeen: [], tx: []
   };
 }
 
@@ -238,6 +238,9 @@ function generateSubs(S) {
     while (sub.next <= today && guard++ < 400) {
       if (sub.trialEnd && sub.next <= sub.trialEnd) { sub.next = addDays(sub.trialEnd, 1); continue; }
       if (sub.auto === false) break; // manual: stays due until marked paid
+      const key = sub.name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5);
+      const already = S.tx.find(t => t.source === 'sms' && !t.subId && t.type === 'expense' && Math.abs(daysBetween(t.date, sub.next)) <= 3 && (sub.cardId ? t.cardId === sub.cardId : t.accountId === sub.accountId) && (t.payee || '').toLowerCase().replace(/[^a-z0-9]/g, '').includes(key));
+      if (already) { already.subId = sub.id; already.smsConfirmed = true; sub.last = sub.next; sub.next = subAdvance(sub.next, sub.cycle); continue; }
       const t = { id: uid(), created: Date.now() + n, type:'expense', date: sub.next, amount: subAED(S, sub), category: sub.category || 'Subscriptions', payee: sub.name, method: sub.cardId ? 'Credit card' : 'Direct debit', subId: sub.id, auto: true };
       if (sub.cardId) t.cardId = sub.cardId; else t.accountId = sub.accountId;
       S.tx.push(t); n++; sub.last = sub.next; sub.next = subAdvance(sub.next, sub.cycle);
@@ -627,13 +630,13 @@ function demoState() {
   const S = emptyState(); const T = todayISO(); const start = ymAdd(ymOf(T), -6) + '-01';
   let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647; const vary = (v, p=0.15) => Math.round(v * (1 - p + rnd()*2*p));
   const A = (o) => (S.accounts.push({ id: uid(), asOf: start, ...o }), S.accounts.at(-1).id);
-  const enbd = A({ name:'Emirates NBD Current', bank:'Emirates NBD', type:'bank', opening: 14500 });
+  const enbd = A({ name:'Emirates NBD Current', bank:'Emirates NBD', type:'bank', opening: 14500, last4:'6120', salary:true });
   const fabS = A({ name:'FAB iSave', bank:'First Abu Dhabi Bank', type:'savings', opening: 22000 });
   const cash = A({ name:'Cash wallet', bank:'', type:'cash', opening: 800 });
   const C = (o) => (S.cards.push({ id: uid(), asOf: start, minPct:5, minFloor:100, ...o }), S.cards.at(-1).id);
-  const c1 = C({ bank:'Emirates NBD', name:'Skywards Signature', limit: 40000, opening: 6200, statementDay: 5, dueDay: 30, cashback: 1, annualFee: 735 });
-  const c2 = C({ bank:'ADCB', name:'TouchPoints Titanium', limit: 20000, opening: 2100, statementDay: 12, dueDay: 6, cashback: 0.5, annualFee: 0 });
-  const c3 = C({ bank:'Mashreq', name:'Cashback Card', limit: 15000, opening: 900, statementDay: 20, dueDay: 14, cashback: 3, annualFee: 0 });
+  const c1 = C({ last4:'4417', bank:'Emirates NBD', name:'Skywards Signature', limit: 40000, opening: 6200, statementDay: 5, dueDay: 30, cashback: 1, annualFee: 735 });
+  const c2 = C({ last4:'8823', bank:'ADCB', name:'TouchPoints Titanium', limit: 20000, opening: 2100, statementDay: 12, dueDay: 6, cashback: 0.5, annualFee: 0 });
+  const c3 = C({ last4:'3051', bank:'Mashreq', name:'Cashback Card', limit: 15000, opening: 900, statementDay: 20, dueDay: 14, cashback: 3, annualFee: 0 });
   const loanStart = addMonths(start, -14);
   const carP = 95000, carR = 4.25, carN = 48; const carEmi = r2(emi(carP, carR, carN));
   const preBal = amortize(carP, carR, carEmi).rows[13].balance; // after 14 EMIs
@@ -728,6 +731,135 @@ function demoState() {
 
 if (typeof module !== 'undefined' && module.exports) module.exports = { generateSubs, subWarnings, subMonthly, subAED, chargesBetween, SUB_PRESETS, setCycleDay, cycleOf, monthRange, cycleLabel, emptyState, demoState, ledger, monthAgg, periodAgg, budgetStatus, cardInfo, loanInfo, goalInfo, emi, flatEmi, flatToReducing, amortize, earlySettlement, reminders, islamicEvents, dti, healthScore, insights, spendingFlags, buildReport, generateRecurring, answer, factsSnapshot, setToday, todayISO, addMonths, ymAdd, ymOf, sum, r2, monthlyDebtPayments, uid, billNextDue };
 </script>
+<script>/* ===== Bank SMS reader (runs on-device, no network) ===== */
+const MERCHANT_CATS = [
+  [/noon|namshi|amazon|amzn|shein|centrepoint|max fashion|h&m|zara|ikea|home centre|sharaf|jumbo|virgin megastore|mall/i, 'Shopping'],
+  [/carrefour|lulu|spinneys|union ?coop|choithrams|waitrose|kibsons|grandiose|al maya|west zone|nesto|viva|instashop|grocer/i, 'Groceries'],
+  [/talabat|deliveroo|careem ?food|noon ?food|zomato|starbucks|costa|tim hortons|mcdonald|kfc|burger|pizza|shake shack|restaurant|cafe|coffee|dunkin|subway|hardee/i, 'Restaurants & Dining'],
+  [/careem|uber|hala|rta|nol|taxi|yango|bolt|parkin|mawaqif|parking/i, 'Transportation'],
+  [/adnoc|enoc|eppco|emarat|petrol|fuel/i, 'Fuel'],
+  [/salik|darb|autotoll/i, 'Salik & Darb'],
+  [/dewa|addc|aadc|sewa|fewa|etihad water|empower|tabreed|lootah gas/i, 'Electricity & Water'],
+  [/etisalat|e&|\bdu\b|emirates integrated|virgin mobile|swyp/i, 'Internet & Mobile'],
+  [/netflix|spotify|anghami|shahid|osn|disney|youtube|google|apple\.com|itunes|icloud|chatgpt|openai|anthropic|claude|microsoft|linkedin|prime video|amazon prime/i, 'Subscriptions'],
+  [/pharmacy|aster|life pharmacy|boots|bin sina|hospital|clinic|medical|mediclinic|nmc|dental|gym|fitness/i, 'Healthcare'],
+  [/emirates airline|flydubai|etihad airways|air arabia|booking\.com|agoda|airbnb|expedia|hotel|wego/i, 'Travel'],
+  [/vox|reel cinemas|novo|cinema|dubai parks|img worlds|ferrari world|playstation|steam|xbox/i, 'Entertainment'],
+  [/school|university|tuition|gems|udemy|coursera/i, 'Education'],
+];
+const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12 };
+function smsHash(text) { let h = 5381; const s = String(text).replace(/\s+/g, ' ').trim(); for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return 'h' + (h >>> 0).toString(36) + s.length; }
+function parseAmount(s) { return +String(s).replace(/,/g, ''); }
+function smsDate(text, fallback) {
+  let m = text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/);
+  if (m) { let [_, d, mo, y] = m; y = +y < 100 ? 2000 + +y : +y; if (+mo > 12 && +d <= 12) [d, mo] = [mo, d]; if (+mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31) return `${y}-${p2(+mo)}-${p2(+d)}`; }
+  m = text.match(/\b(\d{1,2})[\s\-]?(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*[\s\-,]*(\d{2,4})?\b/i);
+  if (m) { const y = m[3] ? (+m[3] < 100 ? 2000 + +m[3] : +m[3]) : +fallback.slice(0, 4); return `${y}-${p2(MONTHS[m[2].toLowerCase()])}-${p2(+m[1])}`; }
+  m = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/); if (m) return m[0];
+  return fallback;
+}
+function guessCategory(S, merchant, text) {
+  const key = (merchant || '').toLowerCase().trim();
+  const learned = S.merchantMap && Object.keys(S.merchantMap).find(k => key && key.includes(k));
+  if (learned) return S.merchantMap[learned];
+  for (const [re, cat] of MERCHANT_CATS) if (re.test(merchant || '') ) return cat;
+  for (const [re, cat] of MERCHANT_CATS) if (re.test(text)) return cat;
+  return 'Other';
+}
+function cleanMerchant(m) {
+  return (m || '').replace(/\s{2,}/g, ' ').replace(/\b(on|dated|at)\s*$/i, '').replace(/[\s,.;:-]+$/, '').replace(/^\s*(merchant|at)\s*:?\s*/i, '').trim().slice(0, 60);
+}
+/* Returns { ok, kind, amount, currency, aed, last4, merchant, date, category, reason, confidence } */
+function parseSMS(S, raw, today = todayISO()) {
+  const text = String(raw || '').replace(/\s+/g, ' ').trim(); const low = text.toLowerCase();
+  const out = { text, hash: smsHash(text), ok: false };
+  if (!text) return { ...out, reason: 'Empty message' };
+  if (/\b(otp|one[- ]time password|verification code|passcode)\b/i.test(text)) return { ...out, reason: 'OTP / security code, ignored' };
+  if (/\b(declined|was not successful|unsuccessful|failed|rejected|insufficient)\b/i.test(text)) return { ...out, reason: 'Declined transaction, nothing was charged' };
+  if (/\b(will be debited|is due|due date|minimum (amount|payment) due|statement (has been|is) generated|pre-?approved|offer|win|apply now)\b/i.test(low) && !/\b(purchase|spent|debited|transaction of)\b.*\b(at|from)\b/i.test(low)) return { ...out, reason: 'Statement / reminder / promotional message, not a transaction' };
+  // Amount: first currency-tagged amount that is NOT an available balance/limit
+  const cur = '(AED|USD|EUR|GBP|SAR|INR|PKR|PHP|QAR|OMR|KWD|BHD|EGP|JOD|DHS?|Dhs?)';
+  const amtRe = new RegExp(`${cur}\\.?\\s?([\\d,]+(?:\\.\\d{1,2})?)|([\\d,]+(?:\\.\\d{1,2})?)\\s?${cur}\\b`, 'gi');
+  let best = null, mm;
+  while ((mm = amtRe.exec(text))) {
+    const before = text.slice(Math.max(0, mm.index - 32), mm.index).toLowerCase();
+    if (/(avl|avail|available|bal(ance)?|limit|outstanding|total due|min(imum)?)[^.]{0,20}$/.test(before)) continue;
+    best = { currency: (mm[1] || mm[4]).toUpperCase().replace(/^DHS?$/, 'AED'), amount: parseAmount(mm[2] || mm[3]) }; break;
+  }
+  if (!best || !(best.amount > 0)) return { ...out, reason: 'No transaction amount found' };
+  Object.assign(out, best);
+  const rate = (S.settings.rates && S.settings.rates[best.currency]) || DEFAULT_RATES[best.currency];
+  out.aed = rate ? r2(best.amount * rate) : null; if (!rate) out.warn = `No exchange rate for ${best.currency}; set one in Settings or edit the amount`;
+  const l4 = text.match(/(?:ending(?: with| in)?|end(?:ing)? no\.?|card(?: no\.?| number)?|a\/c(?: no\.?)?|acc(?:oun)?t(?: no\.?)?|x{2,}|\*{2,}|\bxx|#)\s*[:\-]?\s*(?:[x*]+)?\s*(\d{4})\b/i);
+  out.last4 = l4 ? l4[1] : null;
+  // Kind
+  if (/(payment|amount) of .* (has been )?(received|credited) (to|towards|for|on) (your )?(credit )?card|card payment (of .*)?received|thank you for (your )?payment|payment (received|credited).*credit card/i.test(text)) out.kind = 'card_payment';
+  else if (/\b(refund|reversal|reversed|cashback credited|chargeback)\b/i.test(text)) out.kind = 'refund';
+  else if (/\b(salary|payroll|wps)\b/i.test(text) && /\b(credited|deposited|received)\b/i.test(text)) out.kind = 'salary';
+  else if (/\b(atm|cash withdrawal|withdrawn|withdrawal)\b/i.test(text)) out.kind = 'atm';
+  else if (/\b(credited|deposited|received|has been added)\b/i.test(text) && !/\b(purchase|spent|debited|used)\b/i.test(text)) out.kind = 'income';
+  else if (/\b(purchase|spent|debited|used|transaction|paid|payment|charged|txn|pos|e-?com)\b/i.test(text)) out.kind = 'purchase';
+  else return { ...out, reason: 'Could not tell what kind of transaction this is' };
+  // Merchant
+  const stopAfter = '(?=\\s+(?:on|dated|at|using|via|with|for|in|was|is|has|have|avl|available|ref|txn|card|credited|debited|from|to)\\b|[,;]|\\.(?:\\s|$)|\\s+\\d{1,2}[\\/\\-]|$)';
+  const cands = [...text.matchAll(new RegExp('\\b(at|@|merchant:?|from|to|on)\\s+([A-Za-z0-9&\'.*\\-\\/ ]{2,60}?)' + stopAfter, 'gi'))]
+    .filter(m => !/^(your|the|a|an|aed|usd|eur|gbp|card|credit|debit|account|a\/c|acc|\d|xx|\*|our|you|us)\b/i.test(m[2]) && !/^\d/.test(m[2]));
+  const pref = cands.find(m => /^(at|@|merchant)/i.test(m[1])) || cands.find(m => /^from$/i.test(m[1])) || cands[0];
+  const mer = pref ? [null, pref[2]] : null;
+  out.merchant = cleanMerchant(mer ? mer[1] : '') || ({ salary:'Salary', atm:'ATM withdrawal', card_payment:'Card payment', refund:'Refund', income:'Money received' })[out.kind] || 'Card purchase';
+  out.date = smsDate(text, today); if (out.date > today) out.date = today;
+  out.category = out.kind === 'purchase' ? guessCategory(S, out.merchant, text) : out.kind === 'salary' ? 'Salary' : out.kind === 'refund' ? guessCategory(S, out.merchant, text) : out.kind === 'income' ? 'Other Income' : '';
+  // Resolve card/account by last 4
+  const card = out.last4 && S.cards.find(c => String(c.last4 || '') === out.last4);
+  const acc = out.last4 && S.accounts.find(a => String(a.last4 || '') === out.last4);
+  if (card) out.cardId = card.id; else if (acc) out.accountId = acc.id;
+  const isCardMsg = /credit card|card ending|card no|card number|\bcard\b/i.test(text);
+  if (!card && !acc) { if (S.cards.length === 1 && isCardMsg && /credit/i.test(text)) out.cardId = S.cards[0].id; }
+  out.confidence = (out.cardId || out.accountId ? 1 : 0) + (out.merchant && !/^(Card purchase)$/.test(out.merchant) ? 1 : 0) + (out.aed ? 1 : 0);
+  out.ok = true; return out;
+}
+/* Turn a parsed SMS into a transaction (or a match to an existing one). */
+function smsToTx(S, p, opts = {}) {
+  const base = { id: uid(), created: Date.now(), date: p.date, amount: p.aed, payee: p.merchant, notes: opts.keepText === false ? '' : `SMS: ${p.text.slice(0, 160)}`, sms: p.hash, source: 'sms' };
+  const defAcc = (S.accounts.find(a => a.salary) || S.accounts.find(a => a.type === 'bank') || S.accounts[0] || {}).id;
+  const cashAcc = (S.accounts.find(a => a.type === 'cash') || {}).id;
+  switch (p.kind) {
+    case 'purchase': return { ...base, type:'expense', category: p.category || 'Other', method: p.cardId ? 'Credit card' : 'Debit card', ...(p.cardId ? { cardId: p.cardId } : { accountId: p.accountId || defAcc }) };
+    case 'refund': return { ...base, type:'expense', amount: -Math.abs(p.aed), refund: true, category: p.category || 'Other', payee: 'Refund: ' + p.merchant, ...(p.cardId ? { cardId: p.cardId } : { accountId: p.accountId || defAcc }) };
+    case 'card_payment': return { ...base, type:'card_payment', cardId: p.cardId || (S.cards[0] || {}).id, accountId: defAcc };
+    case 'salary': return { ...base, type:'income', category:'Salary', accountId: p.accountId || defAcc };
+    case 'income': return { ...base, type:'income', category:'Other Income', accountId: p.accountId || defAcc };
+    case 'atm': return cashAcc ? { ...base, type:'transfer', accountId: p.accountId || defAcc, toAccountId: cashAcc, payee:'ATM withdrawal' } : { ...base, type:'expense', category:'Other', accountId: p.accountId || defAcc, payee:'ATM withdrawal' };
+  }
+  return null;
+}
+/* Check for an existing record of the same payment: same SMS, a subscription auto-charge, or a manual entry. */
+function smsDuplicate(S, p) {
+  if ((S.smsSeen || []).includes(p.hash) || S.tx.some(t => t.sms === p.hash)) return { type:'same', text:'This SMS was already imported' };
+  const near = t => Math.abs(daysBetween(t.date, p.date)) <= 3;
+  const sameCard = t => (p.cardId ? t.cardId === p.cardId : p.accountId ? t.accountId === p.accountId : true);
+  const name = (p.merchant || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const sub = S.tx.find(t => t.subId && !t.smsConfirmed && near(t) && sameCard(t) && (S.subs || []).some(s => s.id === t.subId && name.includes(s.name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5))));
+  if (sub) return { type:'sub', tx: sub, text:`Matches the ${sub.payee} subscription charge already recorded on ${sub.date}` };
+  const manual = S.tx.find(t => !t.sms && t.type === 'expense' && Math.abs(t.amount - (p.aed || 0)) < 0.01 && t.date === p.date && sameCard(t));
+  if (manual && p.kind === 'purchase') return { type:'manual', tx: manual, text:`Looks like "${manual.payee || manual.category}" you already added for the same amount and day` };
+  return null;
+}
+/* Apply: returns {status:'added'|'merged'|'skipped', tx} */
+function applySMS(S, p, overrides = {}) {
+  const P = { ...p, ...overrides };
+  const dup = smsDuplicate(S, P);
+  S.smsSeen = (S.smsSeen || []).concat(P.hash).slice(-3000);
+  if (dup?.type === 'same') return { status:'skipped', reason: dup.text };
+  if (dup?.type === 'sub') { dup.tx.amount = P.aed || dup.tx.amount; dup.tx.date = P.date; dup.tx.sms = P.hash; dup.tx.smsConfirmed = true; return { status:'merged', tx: dup.tx, reason: dup.text }; }
+  if (dup?.type === 'manual' && !overrides.force) { dup.tx.sms = P.hash; return { status:'skipped', tx: dup.tx, reason: dup.text }; }
+  const t = smsToTx(S, P); if (!t || !t.amount) return { status:'skipped', reason:'Not enough detail to record' };
+  if (overrides.category && t.type === 'expense') { t.category = overrides.category; const key = (P.merchant || '').toLowerCase().trim(); if (key && key.length >= 3 && overrides.category !== guessCategory({ settings:S.settings }, P.merchant, '')) (S.merchantMap ||= {})[key] = overrides.category; }
+  S.tx.push(t); return { status:'added', tx: t };
+}
+
+if (false) module.exports = { parseSMS, applySMS, smsDuplicate, smsToTx, smsHash, guessCategory };
+</script>
 <script>/* ===== UI layer ===== */
 let S = null;                       // app state
 const V = { page:'dashboard', ym:null, money:{ tab:'all', q:'', cat:'', acct:'', range:'month' }, rep:{ kind:'month', key:null }, chat:[], invTab:'holdings' };
@@ -785,9 +917,10 @@ const PALETTE = ['#7C6CFF','#22D3EE','#F59E0B','#22C55E','#F43F5E','#A78BFA','#3
 const CARD_GRADS = ['linear-gradient(135deg,#1e1b4b,#7c3aed)','linear-gradient(135deg,#0f766e,#22d3ee)','linear-gradient(135deg,#7c2d12,#f59e0b)','linear-gradient(135deg,#111827,#475569)','linear-gradient(135deg,#831843,#f43f5e)','linear-gradient(135deg,#1e3a8a,#3b82f6)'];
 
 /* ---------- toasts & dialogs ---------- */
-function toast(msg, tone = 'good', ms = 3200) {
+function toast(msg, tone = 'good', ms = 3200, action = null) {
   let box = $('.toasts'); if (!box) { box = document.createElement('div'); box.className = 'toasts'; document.body.appendChild(box); }
   const t = document.createElement('div'); t.className = 'toast ' + tone; t.textContent = msg; box.appendChild(t);
+  if (action) { const b = document.createElement('button'); b.className = 'btn sm'; b.style.marginLeft = '10px'; b.textContent = action.label; b.onclick = () => { t.remove(); action.fn(); }; t.appendChild(b); }
   const max = innerWidth < 860 ? 2 : 4; while (box.children.length > max) box.firstChild.remove();
   setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 300); }, ms);
 }
@@ -979,13 +1112,13 @@ function txSub(t) {
     : t.type === 'loan_payment' ? `${accName(t.accountId)} → ${loanName(t.loanId)}` : t.type === 'goal_contribution' ? `${accName(t.accountId)} → ${goalName(t.goalId)}`
     : t.type === 'goal_withdraw' ? `${goalName(t.goalId)} → ${accName(t.accountId)}` : t.type.startsWith('invest') ? `${t.qty} × ${assetName(t.assetId)} · ${accName(t.accountId)}` : '';
   const cat = t.type === 'expense' || t.type === 'income' ? t.category : TX_TYPES[t.type];
-  return `${dshort(t.date)} · ${esc(cat)} · ${esc(via)}${t.recurring ? ' · 🔁 ' + t.recurring : ''}${t.auto ? ' · auto' : ''}`;
+  return `${dshort(t.date)} · ${esc(cat)}${t.refund ? ' refund' : ''} · ${esc(via)}${t.source === 'sms' ? ' · 📩 SMS' : ''}${t.recurring ? ' · 🔁 ' + t.recurring : ''}${t.auto ? ' · auto' : ''}`;
 }
 function txSign(t) { return t.type === 'income' || t.type === 'invest_sell' || t.type === 'goal_withdraw' ? 1 : t.type === 'transfer' ? 0 : -1; }
 function txRow(t) {
-  const s = txSign(t); const ic = t.type === 'expense' || t.type === 'income' ? (CAT_ICON[t.category] || '•') : TYPE_ICON[t.type] || '•';
+  const s = t.amount < 0 ? 1 : txSign(t); const ic = t.type === 'expense' || t.type === 'income' ? (CAT_ICON[t.category] || '•') : TYPE_ICON[t.type] || '•';
   return `<div class="row" data-act="editTx" data-id="${t.id}" style="cursor:pointer"><div class="av">${ic}</div><div class="t"><b>${esc(txTitle(t))} ${t.attachmentName ? `<span class="mut" title="Has attachment">📎</span>` : ''}</b><small>${txSub(t)}</small></div>
-  <div class="amt ${s > 0 ? 'up' : ''}">${s > 0 ? '+' : s < 0 ? '−' : ''}${fmt(t.amount).replace('−','')}</div></div>`;
+  <div class="amt ${s > 0 ? 'up' : ''}">${s > 0 ? '+' : s < 0 ? '−' : ''}${fmt(Math.abs(t.amount))}</div></div>`;
 }
 
 /* ---------- transaction form ---------- */
@@ -1015,10 +1148,10 @@ function txForm(type = 'expense', existing = null, preset = {}) {
   ];
   const help = { card_payment:'Paying your card bill reduces the card balance. It is not counted as an expense again: the purchases were already counted.', transfer:'Moves money between your own accounts. Not income or expense.', loan_payment:'Counts as a "Loan EMI" expense in cash flow. The interest/profit portion is worked out from the loan rate; the rest reduces the outstanding principal.', goal_contribution:'Sets money aside for a goal. Not an expense.' };
   openForm({ title: existing ? 'Edit transaction' : 'Add transaction', fields: [...fields, { k:'_help', type:'hidden', label:'', live: (o, form) => { let h = $('#txhelp', form); if (!h) { form.insertAdjacentHTML('beforeend', '<div class="hint" id="txhelp" style="line-height:1.5"></div>'); h = $('#txhelp', form); } h.textContent = help[o.type] || ''; } }],
-    values: { ...t, recurring: t.recurring || '' },
+    values: { ...t, amount: Math.abs(t.amount ?? 0) || t.amount, recurring: t.recurring || '' },
     onDelete: existing ? () => deleteTx(existing.id) : null,
     onSubmit: async o => {
-      const rec = { ...(existing || {}), id: existing?.id || uid(), created: existing?.created || Date.now(), type: o.type, amount: r2(o.amount), date: o.date, payee: o.payee.trim(), notes: o.notes.trim(), recurring: o.recurring || null };
+      const rec = { ...(existing || {}), id: existing?.id || uid(), created: existing?.created || Date.now(), type: o.type, amount: existing?.refund && o.type === 'expense' ? -r2(o.amount) : r2(o.amount), date: o.date, payee: o.payee.trim(), notes: o.notes.trim(), recurring: o.recurring || null };
       for (const k of ['category','method','cardId','accountId','toAccountId','loanId','goalId']) delete rec[k];
       if (o.type === 'expense' || o.type === 'income') rec.category = o.category;
       if (o.type === 'expense') { rec.method = o.method; if (o.method === 'Credit card') rec.cardId = o.cardId; else rec.accountId = o.accountId; }
@@ -1084,7 +1217,7 @@ const MONTH_PAGES = ['dashboard','budgets','money'];
 function render() {
   setCycleDay(S.settings.cycleDay || 1);
   while (charts.length) charts.pop().destroy();
-  const p = V.page; const title = PAGES.find(x => x[0] === p)?.[1] || '';
+  const p = V.page; const title = PAGES.find(x => x[0] === p)?.[1] || (p === 'sms' ? 'Import bank SMS' : '');
   $('#ptitle').textContent = p === 'dashboard' ? (S.settings.name ? `Hi, ${S.settings.name}` : 'Overview') : title;
   $$('.nav').forEach(n => n.classList.toggle('on', n.dataset.p === p));
   $$('.bnav button').forEach(n => n.classList.toggle('on', n.dataset.p === p || (n.dataset.p === 'more' && !['dashboard','money','subs','cards'].includes(p))));
@@ -1206,7 +1339,7 @@ PAGE.money = L => {
     <div class="panel"><div class="ph"><h3>Expense trend</h3><span class="sp"></span><small>12 months</small></div><div class="chart sm"><canvas id="c_exp"></canvas></div>
     <div class="ph" style="margin:14px 0 8px"><h3>Possible unnecessary spending</h3></div>${flags.length ? flags.map(f => `<div class="ins"><i>🔎</i><div>${esc(f.text)} — <b>${fmt(f.amount)}</b>${f.base ? ` <span class="mut">(avg ${fmt(f.base)})</span>` : ''}</div></div>`).join('') : '<div class="mut" style="font-size:13px">Nothing unusual this month compared with your 3-month average.</div>'}</div></div>`;
   }
-  return `<div class="toolbar"><div class="tabs">${[['all','All'],['income','Income'],['expense','Expenses'],['moves','Transfers & payments'],['recurring','Recurring']].map(([k,l]) => `<button class="${M.tab===k?'on':''}" data-act="mtab" data-v="${k}">${l}</button>`).join('')}</div><span style="flex:1"></span><button class="btn pri" data-act="addTx" data-type="${M.tab==='income'?'income':'expense'}">+ ${M.tab==='income'?'Add income':'Add expense'}</button></div>
+  return `<div class="toolbar"><div class="tabs">${[['all','All'],['income','Income'],['expense','Expenses'],['moves','Transfers & payments'],['recurring','Recurring']].map(([k,l]) => `<button class="${M.tab===k?'on':''}" data-act="mtab" data-v="${k}">${l}</button>`).join('')}</div><span style="flex:1"></span><button class="btn" data-act="go" data-p="sms">📩 Import SMS</button><button class="btn pri" data-act="addTx" data-type="${M.tab==='income'?'income':'expense'}">+ ${M.tab==='income'?'Add income':'Add expense'}</button></div>
   <div class="grid g3" style="margin-bottom:16px">${kpi('Income', fmt(agg.income), esc(rangeLabel()), '⬆️', 'good')}${kpi('Expenses', fmt(agg.expense), `incl. ${fmt(agg.cardSpend)} on cards`, '⬇️', 'bad')}${kpi('Net', `<span class="${agg.net>=0?'up':'down'}">${fmt(agg.net,{sign:true})}</span>`, agg.income ? `Savings rate ${pct(agg.savingsRate)}` : '', '⚖️')}</div>
   ${extra}
   <div class="panel"><div class="toolbar"><input class="inp" id="mq" placeholder="Search transactions…" value="${esc(M.q)}" style="flex:1;min-width:160px">
@@ -1226,6 +1359,77 @@ PAGE_AFTER.money = () => {
   if ($('#c_inc')) { const srcs = [...new Set(ag.flatMap(a => Object.keys(a.incByCat)))]; mkChart('c_inc', { type:'bar', data:{ labels: months.map(ymLabel), datasets: srcs.map((s, i) => ({ label:s, data: ag.map(a => a.incByCat[s] || 0), backgroundColor: PALETTE[(i+3) % PALETTE.length], borderRadius:4, maxBarThickness:24 })) }, options:{ scales:{ x:{ stacked:true, grid:{ display:false } }, y:{ stacked:true, grid:{ color: themeColors().grid }, ticks:{ callback: v => compact(v) } } }, plugins:{ legend:{ display:true, position:'bottom', labels:{ boxWidth:10, boxHeight:10 } } } } }); }
   if ($('#c_exp')) mkChart('c_exp', { type:'line', data:{ labels: months.map(ymLabel), datasets:[{ label:'Expenses', data: ag.map(a => a.expense), borderColor:'#7C6CFF', backgroundColor:'rgba(124,108,255,.15)', fill:true, tension:.35, pointRadius:2 }] } });
 };
+
+/* --- Bank SMS import --- */
+const SMSV = { text:'', items:[] };
+function splitMessages(raw) {
+  const t = String(raw || '').replace(/\r/g, '').trim(); if (!t) return [];
+  let parts = t.split(/\n\s*\n+/);
+  if (parts.length === 1) { const lines = t.split('\n').filter(l => l.trim()); const withAmt = lines.filter(l => /(AED|USD|EUR|GBP|SAR|Dhs?)\.?\s?[\d,]+|[\d,]+(\.\d+)?\s?(AED|USD)/i.test(l)); if (lines.length > 1 && withAmt.length === lines.length) parts = lines; }
+  return parts.map(x => x.trim()).filter(Boolean);
+}
+function smsAnalyse(raw) { SMSV.text = raw; SMSV.items = splitMessages(raw).map(m => { const p = parseSMS(S, m); const dup = p.ok ? smsDuplicate(S, p) : null; return { p, dup, on: p.ok && dup?.type !== 'same' && dup?.type !== 'manual' }; }); }
+const KIND_LBL = { purchase:'Purchase', refund:'Refund', card_payment:'Card bill payment', salary:'Salary', income:'Money received', atm:'ATM withdrawal' };
+PAGE.sms = () => {
+  const payOpts = sel => `<option value="">Choose card / account…</option>${S.cards.map(c => `<option value="card:${c.id}" ${sel === 'card:' + c.id ? 'selected' : ''}>💳 ${esc(c.bank + ' ' + c.name)}${c.last4 ? ' ··' + c.last4 : ''}</option>`).join('')}${S.accounts.map(a => `<option value="acc:${a.id}" ${sel === 'acc:' + a.id ? 'selected' : ''}>🏦 ${esc(a.name)}${a.last4 ? ' ··' + a.last4 : ''}</option>`).join('')}`;
+  const ready = SMSV.items.filter(x => x.on).length;
+  return `<div class="grid g3"><div class="span2"><div class="panel" style="margin-bottom:16px"><div class="ph"><h3>📩 Import from bank SMS</h3><span class="sp"></span><button class="btn sm" data-act="smsPaste">Paste from clipboard</button></div>
+    <textarea class="inp" id="smsin" rows="6" placeholder="Paste one or more bank SMS here. Separate messages with a blank line.">${esc(SMSV.text)}</textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn pri" data-act="smsRead">Read messages</button>${SMSV.items.length ? '<button class="btn ghost" data-act="smsClear">Clear</button>' : ''}</div></div>
+  ${SMSV.items.length ? `<div class="panel"><div class="ph"><h3>Review</h3><span class="sp"></span><button class="btn pri" data-act="smsImport" ${ready ? '' : 'disabled'}>Import ${ready} selected</button></div>
+    ${SMSV.items.map((x, i) => { const p = x.p; if (!p.ok) return `<div class="ins"><i>⏭️</i><div><b>Skipped:</b> ${esc(p.reason)}<div class="mut" style="font-size:12px;margin-top:4px">${esc(p.text.slice(0, 140))}</div></div></div>`;
+      const sel = p.cardId ? 'card:' + p.cardId : p.accountId ? 'acc:' + p.accountId : '';
+      return `<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--card2)"><div style="display:flex;gap:10px;align-items:flex-start"><input type="checkbox" class="smson" data-i="${i}" ${x.on ? 'checked' : ''} style="width:18px;height:18px;margin-top:3px;accent-color:var(--acc)"><div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.merchant)}</b><b class="${p.kind === 'purchase' ? '' : 'up'}">${p.kind === 'purchase' ? '−' : p.kind === 'card_payment' || p.kind === 'atm' ? '' : '+'}${p.aed ? fmt(p.aed) : esc(p.currency + ' ' + p.amount)}</b></div>
+        <div class="mut" style="font-size:12px;margin:3px 0 8px">${KIND_LBL[p.kind]} · ${dshort(p.date)} ${p.date.slice(0,4)}${p.currency !== 'AED' ? ` · ${esc(p.currency)} ${p.amount} converted` : ''}${p.last4 ? ` · card/a/c ··${p.last4}` : ''}</div>
+        <div class="frow" style="gap:8px">${p.kind === 'purchase' || p.kind === 'refund' ? `<select class="inp smscat" data-i="${i}">${EXP_CATS.map(c => `<option ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select>` : '<div></div>'}<select class="inp smspay" data-i="${i}">${payOpts(sel)}</select></div>
+        ${!sel && (p.kind === 'purchase' || p.kind === 'refund') ? `<div class="hint warnc" style="margin-top:6px">No card or account with ending ${esc(p.last4 || '?')}. Choose one; add the last 4 digits to the card so it's automatic next time.</div>` : ''}
+        ${x.dup ? `<div class="hint ${x.dup.type === 'sub' ? '' : 'warnc'}" style="margin-top:6px">${x.dup.type === 'sub' ? '🔁 ' : '⚠️ '}${esc(x.dup.text)}${x.dup.type === 'sub' ? ' — it will be confirmed, not added twice.' : ''}</div>` : ''}
+        ${p.warn ? `<div class="hint warnc">${esc(p.warn)}</div>` : ''}</div></div></div>`; }).join('')}</div>` : ''}</div>
+  <div class="panel"><div class="ph"><h3>Make it automatic</h3></div>${smsGuide()}</div></div>`;
+};
+PAGE_AFTER.sms = () => {
+  const ta = $('#smsin'); ta.oninput = () => { SMSV.text = ta.value; };
+  $$('.smson').forEach(el => el.onchange = () => { SMSV.items[+el.dataset.i].on = el.checked; render(); });
+  $$('.smscat').forEach(el => el.onchange = () => { SMSV.items[+el.dataset.i].p.category = el.value; SMSV.items[+el.dataset.i].userCat = true; });
+  $$('.smspay').forEach(el => el.onchange = () => { const x = SMSV.items[+el.dataset.i]; const [k, id] = el.value.split(':'); delete x.p.cardId; delete x.p.accountId; if (k === 'card') x.p.cardId = id; else if (k === 'acc') x.p.accountId = id; x.dup = smsDuplicate(S, x.p); render(); });
+};
+function smsLink() { return location.origin + location.pathname + '?sms='; }
+function smsGuide() {
+  const pwa = IS_PWA;
+  return `<div style="font-size:13px;line-height:1.6">
+  <p style="margin-top:0"><b>1. Share an SMS (2 taps)</b><br>${pwa ? 'In Messages, long-press a bank SMS → Share → DirhamWise. It is recorded straight away.' : 'Open the DirhamWise phone app to share SMS directly. Here, paste messages into the box.'}</p>
+  <p><b>2. Fully automatic with MacroDroid</b> (free Android app)</p>
+  <ol style="padding-left:18px;margin:0">
+   <li>Install <b>MacroDroid</b> from the Play Store and allow it to read SMS.</li>
+   <li>Add Macro → Trigger: <b>SMS Received</b>. Choose your bank senders (e.g. EmiratesNBD, ADCB, FAB, Mashreq).</li>
+   <li>Action: <b>Open Website / URL</b>. Paste the link below, then add the <b>SMS message</b> magic text right after <code>sms=</code>. Turn on URL encoding if offered.</li>
+   <li>Save as “DirhamWise SMS”.</li></ol>
+  ${pwa ? `<div style="display:flex;gap:6px;margin:10px 0"><input class="inp" readonly value="${esc(smsLink())}" id="smslink"><button class="btn sm" data-act="copyLink">Copy</button></div>` : '<div class="hint" style="margin:8px 0">The automatic link works in the installed phone app.</div>'}
+  <p class="mut" style="font-size:12px">Each bank SMS then opens DirhamWise for a moment and the payment is saved. ${S.settings.smsAuto === false ? 'Auto-save is <b>off</b>: messages open for review first.' : 'Clear purchases on known cards save automatically; anything unclear opens here for review.'} OTPs, declined payments, statements and offers are ignored. Messages never leave your phone.</p>
+  <p class="mut" style="font-size:12px;margin-bottom:0"><b>Tip:</b> add the last 4 digits to each card and account so messages match automatically.</p></div>`;
+}
+function smsImportItems(items) {
+  let added = 0, merged = 0, skipped = 0; const ids = [];
+  for (const x of items) { const ov = x.userCat ? { category: x.p.category } : {}; const r = applySMS(S, x.p, { ...ov, force: x.dup?.type === 'manual' });
+    if (r.status === 'added') { added++; ids.push(r.tx.id); } else if (r.status === 'merged') merged++; else skipped++; }
+  return { added, merged, skipped, ids };
+}
+async function handleIncomingSMS() {
+  if (!IS_PWA) return;
+  const q = new URLSearchParams(location.search); let raw = q.get('sms') || [q.get('title'), q.get('text')].filter(Boolean).join(' ').trim();
+  if (!raw) return;
+  try { history.replaceState(null, '', location.pathname + location.hash); } catch(e) {}
+  const p = parseSMS(S, raw); const dup = p.ok ? smsDuplicate(S, p) : null;
+  if (p.ok && S.settings.smsAuto !== false && (p.cardId || p.accountId || ['card_payment','salary'].includes(p.kind)) && p.aed && (!dup || dup.type === 'sub' || dup.type === 'same')) {
+    const r = applySMS(S, p); commit();
+    if (r.status === 'added') toast(`📩 ${KIND_LBL[p.kind]}: ${fmt(p.aed)} ${p.kind === 'purchase' ? 'at ' + p.merchant : ''} recorded${p.cardId ? ' on ' + cardName(p.cardId) : ''}`, 'good', 7000, { label:'Undo', fn: () => { S.tx = S.tx.filter(t => t.id !== r.tx.id); commit('Removed', 'info'); } });
+    else if (r.status === 'merged') toast(`📩 ${p.merchant} subscription charge confirmed (${fmt(p.aed)})`, 'info', 5000);
+    else toast(`📩 ${r.reason}`, 'info', 5000);
+    return;
+  }
+  smsAnalyse(raw); go('sms'); toast(p.ok ? 'Check this SMS before saving' : `📩 ${p.reason}`, p.ok ? 'warn' : 'info', 5000);
+}
 
 /* --- Subscriptions --- */
 const CYCLES = [['weekly','Weekly'],['monthly','Monthly'],['quarterly','Quarterly'],['yearly','Yearly']];
@@ -1337,7 +1541,7 @@ function cardForm(c) {
       { type:'row', items:[ { k:'statementDay', label:'Statement day (1–28)', type:'number', req:true, min:1, max:28 }, { k:'dueDay', label:'Payment due day (1–31)', type:'number', req:true, min:1, max:31 } ] },
       { type:'row', items:[ { k:'minPct', label:'Minimum payment %', type:'number', min:0, max:100, hint:'Most UAE cards: 5% or AED 100' }, { k:'minFloor', label:'Minimum payment floor', money:true, min:0 } ] },
       { type:'row', items:[ { k:'cashback', label:'Cashback %', type:'number', min:0, max:20 }, { k:'annualFee', label:'Annual fee', money:true, min:0 } ] },
-      { k:'expiry', label:'Card expiry (month)', type:'month', hint:'Used to warn you to update subscriptions before the card expires.' } ],
+      { type:'row', items:[ { k:'expiry', label:'Card expiry (month)', type:'month', hint:'Warns you to update subscriptions before expiry.' }, { k:'last4', label:'Last 4 digits', ph:'1234', validate: v => v && !/^\d{4}$/.test(v) ? 'Enter 4 digits' : null, hint:'Matches bank SMS to this card.' } ] } ],
     onDelete: c ? () => { if (S.tx.some(t => t.cardId === c.id)) return toast('This card has transactions. Delete or move them first.', 'bad'); S.cards = S.cards.filter(x => x.id !== c.id); commit('Card deleted', 'info'); } : null,
     onSubmit: o => { const rec = { ...(c || { id: uid() }), ...o, limit: r2(o.limit), opening: r2(o.opening||0), minFloor: o.minFloor === '' ? 100 : o.minFloor };
       if (c) S.cards[S.cards.findIndex(x => x.id === c.id)] = rec; else S.cards.push(rec); commit(c ? 'Card updated' : 'Card added'); } });
@@ -1586,7 +1790,7 @@ const UAE_BANKS = ['Emirates NBD','First Abu Dhabi Bank','ADCB','Mashreq','Dubai
 function accountForm(a) {
   openForm({ title: a ? 'Edit account' : 'Add account', values: a || { type:'bank', bank:'Emirates NBD', asOf: todayISO(), opening: 0 },
     fields: [ { k:'name', label:'Account name', req:true, ph:'e.g. ENBD Current' }, { type:'row', items:[ { k:'type', label:'Type', type:'select', options:[['bank','Bank account'],['savings','Savings account'],['cash','Cash wallet'],['wallet','Digital wallet (e.g. Apple Pay balance, Careem Pay)']] }, { k:'bank', label:'Bank', type:'select', options: ['', ...UAE_BANKS], show: o => o.type === 'bank' || o.type === 'savings' } ] },
-      { type:'row', items:[ { k:'opening', label:'Balance', money:true, req:true }, { k:'asOf', label:'Balance as of', type:'date', req:true } ] }, { k:'salary', label:'Salary is paid into this account', type:'check' } ],
+      { type:'row', items:[ { k:'opening', label:'Balance', money:true, req:true }, { k:'asOf', label:'Balance as of', type:'date', req:true } ] }, { k:'last4', label:'Last 4 digits of account / debit card (optional)', ph:'4321', validate: v => v && !/^\d{4}$/.test(v) ? 'Enter 4 digits' : null, hint:'Lets bank SMS for this account be recorded automatically.' }, { k:'salary', label:'Salary is paid into this account', type:'check' } ],
     onDelete: a ? () => { if (S.tx.some(t => t.accountId === a.id || t.toAccountId === a.id)) return toast('This account has transactions. Delete or move them first.', 'bad'); S.accounts = S.accounts.filter(x => x.id !== a.id); commit('Account deleted', 'info'); } : null,
     onSubmit: o => { const rec = { ...(a || { id: uid() }), ...o, name: o.name.trim(), opening: r2(o.opening) };
       if (a) S.accounts[S.accounts.findIndex(x => x.id === a.id)] = rec; else S.accounts.push(rec); commit(a ? 'Account updated' : 'Account added'); } });
@@ -1608,6 +1812,9 @@ PAGE.settings = () => {
     <p class="mut" style="margin-top:0;line-height:1.55">${IS_PWA ? '🔒 Everything is stored only on this device. Nothing is sent to any server. Export a backup regularly, and use it to move your data to a new phone.' : PST.mode === 'cloud' ? '🔒 Saved to your private space for this app. Only you can read it while signed in; the app owner and other viewers cannot see it.' : '⚠️ Saved in this browser only. Open the app while signed in to Claude to sync privately across devices.'}</p>
     <div style="display:flex;flex-wrap:wrap;gap:8px"><button class="btn" data-act="backup">Export backup (JSON)</button><button class="btn" data-act="restore">Import backup</button><button class="btn" data-act="txcsv">Export all transactions (CSV)</button></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"><button class="btn" data-act="demo">Load sample data</button><button class="btn danger" data-act="wipe">Erase all data</button></div><input type="file" id="restoreFile" accept="application/json,.json" hidden></div>
+  <div class="panel" style="margin-bottom:16px"><div class="ph"><h3>📩 Bank SMS import</h3><span class="sp"></span><button class="btn sm" data-act="go" data-p="sms">Open</button></div>
+    <div class="fld"><label class="chk"><input type="checkbox" class="sset" data-k="smsAuto" ${st.smsAuto !== false ? 'checked' : ''}> Save clear SMS automatically (otherwise review each one)</label></div>
+    <div class="hint">Cards and accounts matched by last 4 digits: ${S.cards.filter(c => c.last4).length + S.accounts.filter(a => a.last4).length} of ${S.cards.length + S.accounts.length}. ${Object.keys(S.merchantMap || {}).length ? `Learned categories for ${Object.keys(S.merchantMap).length} merchants.` : ''}</div></div>
   ${IS_PWA ? `<div class="panel" style="margin-bottom:16px"><div class="ph"><h3>App</h3></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px">${lockHash() ? '<button class="btn" data-act="setPin">Change PIN</button><button class="btn danger" data-act="removePin">Remove PIN lock</button>' : '<button class="btn pri" data-act="setPin">Set a PIN lock</button>'}${!isStandalone() ? '<button class="btn" data-act="install">Install on this device</button>' : ''}</div>
     <div class="hint" style="margin-top:8px">${isStandalone() ? 'Running as an installed app.' : 'Install to get a home-screen icon, full-screen view and offline use.'}${PST.persisted ? ' Storage is protected from automatic clean-up.' : ''}</div></div>` : ''}
@@ -1645,6 +1852,12 @@ function installHelp() {
 }
 
 const ACT = {
+  smsRead: () => { smsAnalyse($('#smsin').value); render(); if (!SMSV.items.length) toast('Paste at least one SMS', 'warn'); },
+  smsClear: () => { SMSV.text = ''; SMSV.items = []; render(); },
+  smsPaste: async () => { try { const t = await navigator.clipboard.readText(); smsAnalyse((SMSV.text ? SMSV.text + '\n\n' : '') + t); render(); } catch(e) { toast('Clipboard access was blocked. Long-press the box and paste instead.', 'warn'); } },
+  smsImport: () => { const sel = SMSV.items.filter(x => x.on && x.p.ok); if (sel.some(x => (x.p.kind === 'purchase' || x.p.kind === 'refund') && !x.p.cardId && !x.p.accountId)) return toast('Choose a card or account for every selected message', 'bad');
+    const r = smsImportItems(sel); SMSV.text = ''; SMSV.items = []; commit(`Imported ${r.added}${r.merged ? `, confirmed ${r.merged} subscription charge${r.merged > 1 ? 's' : ''}` : ''}${r.skipped ? `, skipped ${r.skipped} duplicate${r.skipped > 1 ? 's' : ''}` : ''}`); go('money'); },
+  copyLink: async () => { try { await navigator.clipboard.writeText(smsLink()); toast('Link copied'); } catch(e) { $('#smslink').select(); toast('Select and copy the link', 'warn'); } },
   addSub: () => subForm(), editSub: d => subForm(S.subs.find(x => x.id === d.id)), paySub: d => paySub(d.id),
   subStatus: d => { const s = S.subs.find(x => x.id === d.id); s.status = d.v; if (d.v === 'active' && s.next < todayISO()) { while (s.next < todayISO()) s.next = subAdvance(s.next, s.cycle); } commit(d.v === 'active' ? `${s.name} resumed` : `${s.name} paused`, 'info'); },
   setPin: () => openForm({ title: lockHash() ? 'Change PIN' : 'Set a PIN lock', fields:[ { k:'pin', label:'New PIN (4–8 digits)', type:'password', req:true, validate: v => /^\d{4,8}$/.test(v) ? null : 'Use 4 to 8 digits' }, { k:'pin2', label:'Repeat PIN', type:'password', req:true, validate: (v, o) => v !== o.pin ? 'PINs do not match' : null } ],
@@ -1679,13 +1892,15 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 
 /* ---------- boot ---------- */
 function startApp(msg) {
+  const viaSMS = /[?&](sms|text|title)=/.test(location.search);
   setCycleDay(S.settings.cycleDay || 1); V.ym = cycleOf(todayISO());
   const created = generateRecurring(S) + generateSubs(S);
-  shell(); const h = (location.hash || '').slice(1); V.page = PAGES.some(p => p[0] === h) ? h : 'dashboard';
+  shell(); const h = (location.hash || '').slice(1); V.page = PAGES.some(p => p[0] === h) || h === 'sms' ? h : 'dashboard';
   render(); scheduleSave();
   if (msg) toast(msg, 'info', 5000);
+  handleIncomingSMS();
   if (created) toast(`${created} recurring transaction${created > 1 ? 's' : ''} added for this period`, 'info');
-  const due = reminders(S, ledger(S), +S.settings.remindDays || 5); if (due.length) setTimeout(() => toast(`${due.length} payment${due.length > 1 ? 's' : ''} due soon: ${due.slice(0,3).map(r => r.title).join(', ')}${due.length > 3 ? '…' : ''}`, 'warn', 6000), 800);
+  const due = viaSMS ? [] : reminders(S, ledger(S), +S.settings.remindDays || 5); if (due.length) setTimeout(() => toast(`${due.length} payment${due.length > 1 ? 's' : ''} due soon: ${due.slice(0,3).map(r => r.title).join(', ')}${due.length > 3 ? '…' : ''}`, 'warn', 6000), 800);
 }
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (S && $('#view') && PAGES.some(p => p[0] === h) && h !== V.page) { V.page = h; render(); } });
 matchMedia('(prefers-color-scheme: light)').addEventListener?.('change', () => { if (S) { applyTheme(); render(); } });

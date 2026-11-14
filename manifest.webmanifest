@@ -28,6 +28,10 @@
  ],
  "shortcuts": [
   {
+   "name": "Import bank SMS",
+   "url": "./#sms"
+  },
+  {
    "name": "Add transaction",
    "url": "./#money"
   },
@@ -35,5 +39,13 @@
    "name": "Reminders",
    "url": "./#alerts"
   }
- ]
+ ],
+ "share_target": {
+  "action": "./",
+  "method": "GET",
+  "params": {
+   "title": "title",
+   "text": "text"
+  }
+ }
 }
