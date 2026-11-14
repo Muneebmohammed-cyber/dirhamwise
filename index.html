@@ -268,6 +268,8 @@ function subWarnings(S, L, days = 30) {
       if (daysBetween(today, expEnd) < 0) out.push({ level:'bad', cardId:c.id, text:`${c.bank} ${c.name} expired (${c.expiry}). Update the card on: ${mine.map(s => s.name).join(', ')}.` });
       else if (hit.length) out.push({ level:'warn', cardId:c.id, text:`${c.bank} ${c.name} expires ${c.expiry}. Update the new card details on: ${hit.map(s => s.name).join(', ')}.` }); }
   }
+  for (const c of S.cards) { if (!c.bankAvail) continue; const lim = +c.limit || 0;
+    if (c.bankAvail.amount < Math.max(1000, lim * 0.1)) out.push({ level: c.bankAvail.amount < 300 ? 'bad' : 'warn', cardId:c.id, text:`${c.bank} ${c.name}: your bank reported only ${fmtPlain(c.bankAvail.amount)} available credit on ${c.bankAvail.date}. Larger purchases or renewals may be declined.` }); }
   for (const s of active) {
     const p = payer(s);
     if (s.cardId && !p) out.push({ level:'bad', subId:s.id, text:`${s.name} is linked to a card that no longer exists. Edit it and choose a payment card.` });
@@ -735,7 +737,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { generate
 const MERCHANT_CATS = [
   [/noon|namshi|amazon|amzn|shein|centrepoint|max fashion|h&m|zara|ikea|home centre|sharaf|jumbo|virgin megastore|mall/i, 'Shopping'],
   [/carrefour|lulu|spinneys|union ?coop|choithrams|waitrose|kibsons|grandiose|al maya|west zone|nesto|viva|instashop|grocer/i, 'Groceries'],
-  [/talabat|deliveroo|careem ?food|noon ?food|zomato|starbucks|costa|tim hortons|mcdonald|kfc|burger|pizza|shake shack|restaurant|cafe|coffee|dunkin|subway|hardee/i, 'Restaurants & Dining'],
+  [/talabat|deliveroo|careem ?food|noon ?food|zomato|starbucks|costa|tim hortons|mcdonald|kfc|burger|pizza|shake shack|restaur|cafe|coffee|cafeteria|kitchen|grill|bakery|shawarma|biryani|karak|chai|majlis|mandi|bistro|diner|eatery|food|dunkin|subway|hardee/i, 'Restaurants & Dining'],
   [/careem|uber|hala|rta|nol|taxi|yango|bolt|parkin|mawaqif|parking/i, 'Transportation'],
   [/adnoc|enoc|eppco|emarat|petrol|fuel/i, 'Fuel'],
   [/salik|darb|autotoll/i, 'Salik & Darb'],
@@ -787,6 +789,8 @@ function parseSMS(S, raw, today = todayISO()) {
     best = { currency: (mm[1] || mm[4]).toUpperCase().replace(/^DHS?$/, 'AED'), amount: parseAmount(mm[2] || mm[3]) }; break;
   }
   if (!best || !(best.amount > 0)) return { ...out, reason: 'No transaction amount found' };
+  const av = text.match(/(?:avl|avail(?:able)?)\.?\s*(cr(?:edit)?\.?\s*)?(limit|lmt|bal(?:ance)?)\.?\s*(?:is|:)?\s*(?:AED|Dhs?)\.?\s*([\d,]+(?:\.\d{1,2})?)/i);
+  if (av) { out.avail = parseAmount(av[3]); out.availType = /bal/i.test(av[2]) ? 'balance' : 'limit'; }
   Object.assign(out, best);
   const rate = (S.settings.rates && S.settings.rates[best.currency]) || DEFAULT_RATES[best.currency];
   out.aed = rate ? r2(best.amount * rate) : null; if (!rate) out.warn = `No exchange rate for ${best.currency}; set one in Settings or edit the amount`;
@@ -850,6 +854,8 @@ function applySMS(S, p, overrides = {}) {
   const P = { ...p, ...overrides };
   const dup = smsDuplicate(S, P);
   S.smsSeen = (S.smsSeen || []).concat(P.hash).slice(-3000);
+  if (P.avail != null) { const c = P.cardId && P.availType === 'limit' && S.cards.find(x => x.id === P.cardId); if (c && (!c.bankAvail || c.bankAvail.date <= P.date)) c.bankAvail = { amount: P.avail, date: P.date };
+    const a = P.accountId && P.availType === 'balance' && S.accounts.find(x => x.id === P.accountId); if (a && (!a.bankBal || a.bankBal.date <= P.date)) a.bankBal = { amount: P.avail, date: P.date }; }
   if (dup?.type === 'same') return { status:'skipped', reason: dup.text };
   if (dup?.type === 'sub') { dup.tx.amount = P.aed || dup.tx.amount; dup.tx.date = P.date; dup.tx.sms = P.hash; dup.tx.smsConfirmed = true; return { status:'merged', tx: dup.tx, reason: dup.text }; }
   if (dup?.type === 'manual' && !overrides.force) { dup.tx.sms = P.hash; return { status:'skipped', tx: dup.tx, reason: dup.text }; }
@@ -1521,6 +1527,7 @@ PAGE.cards = L => {
   ${infos.length ? `<div class="grid g3">${infos.map(({ c, i }, k) => `<div><div class="ccard" style="background:${CARD_GRADS[k % CARD_GRADS.length]}"><div class="bk">${esc(c.bank)}</div><div class="nm">${esc(c.name)}</div><div class="bal">${fmt(Math.max(0, i.bal))}${i.bal < 0 ? ` <span style="font-size:13px">(credit ${fmt(-i.bal)})</span>` : ''}</div><div class="meta"><span>Limit ${fmt(i.limit)}</span><span>${pct(i.util,0)} used</span></div><div class="bar" style="margin-top:8px;background:rgba(255,255,255,.2);border:0"><i style="width:${clamp(i.util,0,100)}%;background:#fff"></i></div></div>
     <div class="panel" style="margin-top:10px;padding:14px"><div class="stats"><div class="stat"><span>Available</span><b>${fmt(i.available)}</b></div><div class="stat"><span>Due date</span><b>${dshort(i.due)} <span class="${i.daysToDue <= 5 && i.bal > 0 && !i.paidRecently ? 'down' : 'mut'}" style="font-size:12px">(${i.daysToDue}d)</span></b></div><div class="stat"><span>Minimum due</span><b>${fmt(i.minPay)}</b></div><div class="stat"><span>Statement</span><b>${dshort(i.stmt)}</b></div><div class="stat"><span>Cashback</span><b>${c.cashback || 0}% · ${fmt(i.cashback)}</b></div><div class="stat"><span>Annual fee</span><b>${+c.annualFee ? fmt(c.annualFee) : 'Free'}</b></div></div>
     ${i.paidRecently ? '<div style="margin-top:10px"><span class="tag good">Payment made this cycle</span></div>' : ''}
+    ${c.bankAvail ? (() => { const diff = r2(c.bankAvail.amount - i.available); return `<div class="ins" style="margin:10px 0 0;font-size:12px"><i>📩</i><div>Bank says <b>${fmt(c.bankAvail.amount)}</b> available (SMS ${dshort(c.bankAvail.date)}).${Math.abs(diff) >= 1 ? ` The app shows ${fmt(i.available)}. <button class="btn sm" data-act="syncCard" data-id="${c.id}">Match bank</button>` : ' In sync ✓'}</div></div>`; })() : ''}
     ${cardSubsBlock(c)}
     <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap"><button class="btn sm pri" data-act="payCard" data-id="${c.id}">Pay bill</button><button class="btn sm" data-act="cardBuy" data-id="${c.id}">+ Purchase</button><button class="btn sm" data-act="cardTx" data-id="${c.id}">Transactions</button><button class="btn sm ghost" data-act="editCard" data-id="${c.id}">Edit</button></div></div></div>`).join('')}</div>`
   : `<div class="panel">${empty('Add your UAE credit cards to track balances, due dates, utilisation and cashback.', 'addCard', 'Add a card')}</div>`}`;
@@ -1852,6 +1859,8 @@ function installHelp() {
 }
 
 const ACT = {
+  syncCard: d => { const c = S.cards.find(x => x.id === d.id); const ci = cardInfo(S, ledger(S), c); const target = (+c.limit || 0) - c.bankAvail.amount; const delta = r2(target - ci.bal);
+    confirmBox(`Set the ${c.bank} ${c.name} balance to ${fmt(target)} so available credit matches your bank (${fmt(c.bankAvail.amount)})? This adjusts the opening balance by ${fmt(delta, { sign:true })}; your transactions stay as they are.`, () => { c.opening = r2((+c.opening || 0) + delta); commit('Card balance matched to bank'); }, 'Match bank'); },
   smsRead: () => { smsAnalyse($('#smsin').value); render(); if (!SMSV.items.length) toast('Paste at least one SMS', 'warn'); },
   smsClear: () => { SMSV.text = ''; SMSV.items = []; render(); },
   smsPaste: async () => { try { const t = await navigator.clipboard.readText(); smsAnalyse((SMSV.text ? SMSV.text + '\n\n' : '') + t); render(); } catch(e) { toast('Clipboard access was blocked. Long-press the box and paste instead.', 'warn'); } },
