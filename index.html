@@ -1450,6 +1450,15 @@ function render() {
 }
 function go(p) { V.enter = true; V.page = p; try { if (location.hash !== '#' + p) history.replaceState(null, '', '#' + p); } catch(e) {} render(); window.scrollTo(0, 0); }
 
+/* ---------- install prompt ---------- */
+function canOfferInstall() { return IS_PWA && !isStandalone() && !(lsGet('dw_install_dismissed') > Date.now() - 7 * 864e5); }
+function installBanner() {
+  if (!canOfferInstall()) return '';
+  return `<div class="panel" style="margin-bottom:16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div class="logo" style="width:42px;height:42px;border-radius:11px;font-size:19px">D</div>
+    <div style="flex:1;min-width:180px"><b>Install DirhamWise on this phone</b><div class="mut" style="font-size:13px">Opens from your home screen like any app, full screen and offline.</div></div>
+    <button class="btn pri" data-act="install">Install app</button><button class="btn ghost" data-act="installLater">Not now</button></div>`;
+}
+
 /* ---------- banknote engraving ---------- */
 let _guil = null;
 function guilloche() {
@@ -1467,7 +1476,7 @@ function guilloche() {
 }
 
 /* ---------- motion helpers ---------- */
-const APP_VERSION = '2026.11.15-c';
+const APP_VERSION = '2026.11.15-d';
 function motionMode() { return (S && S.settings.motion) || 'full'; }
 function noMotion() { const m = motionMode(); return m === 'off' || (m === 'auto' && matchMedia('(prefers-reduced-motion: reduce)').matches); }
 function applyMotion() { document.documentElement.dataset.motion = motionMode(); }
@@ -1526,7 +1535,7 @@ PAGE.dashboard = L => {
   const D = dti(S, L, ym); const spentPct = m.income ? clamp(m.expense / (m.income + (m.pendingIncome || 0)) * 100, 0, 100) : 0;
   const expectPct = m.income + (m.pendingIncome || 0) ? clamp((m.pendingIncome || 0) / (m.income + m.pendingIncome) * 100, 0, 100) : 0;
   const leftPct = clamp(100 - spentPct - expectPct, 0, 100);
-  return `<div class="grid g3" style="margin-bottom:16px">
+  return `${installBanner()}<div class="grid g3" style="margin-bottom:16px">
     <section class="note span2 ${V.entering ? 'draw' : ''}">${guilloche()}
       <div class="seal"><div><b>${H.score}</b>health</div></div>
       <div class="nh"><span>Net worth, ${asOf}</span></div>
@@ -2198,6 +2207,7 @@ function pinScreen(onOk) {
 }
 let deferredInstall = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
+window.addEventListener('appinstalled', () => { deferredInstall = null; toast('DirhamWise installed. Open it from your home screen.'); if (S) render(); });
 function installHelp() {
   if (deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(() => { deferredInstall = null; }); return; }
   const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -2205,6 +2215,7 @@ function installHelp() {
 }
 
 const ACT = {
+  installLater: () => { lsSet('dw_install_dismissed', String(Date.now())); render(); },
   catAll: () => { V.catAll = !V.catAll; render(); },
   catDrill: d => { V.money = { ...V.money, tab:'expense', cat: d.cat, range:'month', q:'', acct:'' }; go('money'); },
   syncCard: d => { const c = S.cards.find(x => x.id === d.id); const ci = cardInfo(S, ledger(S), c); const target = (+c.limit || 0) - c.bankAvail.amount; const delta = r2(target - ci.bal);
@@ -2285,6 +2296,7 @@ async function boot() {
   document.body.innerHTML = `<div class="onb"><section class="note draw">${guilloche()}<div class="nh"><span>DirhamWise</span></div><div class="big" style="font-size:34px">AED 0.00</div><div class="chg">Your net worth, once you add an account</div></section>
   <h2>Know where every dirham goes</h2><p>Track income, spending, budgets, credit cards, loans, savings goals and investments in one place. Built for life in the UAE: salary-to-salary months, DEWA and ADDC, Salik and Darb, UAE banks and cards.</p>
   <p style="font-size:13.5px">${IS_PWA ? 'Your data stays on this device. No account, no server.' : PST.mode === 'cloud' ? 'Your data is stored privately for your account.' : 'Your data will be saved in this browser.'}</p>
+  ${IS_PWA && !isStandalone() ? `<div class="ins info" style="margin-top:18px"><div style="flex:1"><b>Get the app</b><div style="font-size:13.5px">Install DirhamWise to open it from your home screen.</div></div><button class="btn sm" data-act="install">Install</button></div>` : ''}
   <div class="acts"><button class="btn pri" data-act="startFresh" style="padding:11px 18px">Start with my own data</button><button class="btn" data-act="startDemo" style="padding:11px 18px">Try it with sample data</button></div></div></div>`;
 }
 boot();
