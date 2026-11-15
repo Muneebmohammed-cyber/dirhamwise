@@ -1588,7 +1588,7 @@ function guilloche() {
 }
 
 /* ---------- motion helpers ---------- */
-const APP_VERSION = '2026.11.15-f';
+const APP_VERSION = '2026.11.15-g';
 function motionMode() { return (S && S.settings.motion) || 'full'; }
 function noMotion() { const m = motionMode(); return m === 'off' || (m === 'auto' && matchMedia('(prefers-reduced-motion: reduce)').matches); }
 function applyMotion() { document.documentElement.dataset.motion = motionMode(); }
@@ -1927,6 +1927,7 @@ function messSubscribe() {
     clearTimeout(MX.t); MX.t = setTimeout(async () => { try { MX.data = await MX.api.load(gid); if (V.page === 'mess') render(); } catch(e) {} }, 350);
   });
 }
+document.addEventListener('visibilitychange', async () => { if (!document.hidden && MX.api && MX.gid && MX.ready) { try { MX.data = await MX.api.load(MX.gid); if (V.page === 'mess') render(); } catch(e) {} } });
 async function messRun(fn, ok) { try { const r = await fn(); if (ok) toast(ok); MX.data = MX.gid ? await MX.api.load(MX.gid) : null; render(); return r; } catch(e) { console.error(e); return e.message || 'Something went wrong. Check your internet connection and try again.'; } }
 PAGE.mess = () => {
   const api = messBackend();
