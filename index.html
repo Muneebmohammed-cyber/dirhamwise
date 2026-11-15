@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png"><link rel="icon" href="icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>window.__PWA__=true;</script>
+<script src="config.js"></script>
 <script src="lib/chart.umd.js"></script>
 <style>/* DirhamWise — "statement & banknote" design system
    Salt #F3F5F4 · Ink #15201C · Dirham #0E6B4F · Gulf #23618F · Crimson #B42318 · Gold #A8822A */
@@ -1068,6 +1069,116 @@ function applySMS(S, p, overrides = {}) {
 
 if (false) module.exports = { splitSMSText, parseSMSFile, parseSMS, applySMS, smsDuplicate, smsToTx, smsHash, guessCategory };
 </script>
+<script>/* ===== Mess groups: shared grocery budget ===== */
+const MESS_CATS = ['Groceries','Vegetables & fruit','Meat & fish','Rice & staples','Gas cylinder','Drinking water','Cleaning supplies','Cook / helper','Other'];
+
+/* ---- pure maths (tested in node) ---- */
+function messMonthRange(day, ym) { day = +day || 1; if (day === 1) return [ym + '-01', dateOn(ym, 31)]; return [dateOn(ymAdd(ym, -1), day), addDays(dateOn(ym, day), -1)]; }
+function messCycleOf(day, d) { day = +day || 1; if (day === 1) return ymOf(d); return d >= dateOn(ymOf(d), day) ? ymAdd(ymOf(d), 1) : ymOf(d); }
+function messShares(e, members) {
+  const ids = (e.split_among && e.split_among.length ? e.split_among : members.filter(m => m.active).map(m => m.id));
+  const n = ids.length || 1; const each = Math.floor((+e.amount * 100) / n) / 100; const rem = r2(+e.amount - each * n);
+  return ids.map((id, i) => [id, r2(each + (i === 0 ? rem : 0))]);
+}
+function messBalances(members, expenses, settlements) {
+  const bal = {}, paid = {}, share = {}; for (const m of members) { bal[m.id] = 0; paid[m.id] = 0; share[m.id] = 0; }
+  for (const e of expenses) { if (!(e.paid_by in bal)) { bal[e.paid_by] = 0; paid[e.paid_by] = 0; share[e.paid_by] = 0; }
+    bal[e.paid_by] += +e.amount; paid[e.paid_by] += +e.amount;
+    for (const [id, s] of messShares(e, members)) { if (!(id in bal)) { bal[id] = 0; paid[id] = 0; share[id] = 0; } bal[id] -= s; share[id] += s; } }
+  for (const s of settlements) { if (s.from_member in bal) bal[s.from_member] += +s.amount; if (s.to_member in bal) bal[s.to_member] -= +s.amount; }
+  for (const k in bal) { bal[k] = r2(bal[k]); paid[k] = r2(paid[k]); share[k] = r2(share[k]); }
+  return { bal, paid, share };
+}
+function messSettleUp(bal) { // fewest transfers: largest debtor pays largest creditor
+  const deb = Object.entries(bal).filter(([, v]) => v < -0.009).map(([id, v]) => ({ id, v: -v })).sort((a, b) => b.v - a.v);
+  const cre = Object.entries(bal).filter(([, v]) => v > 0.009).map(([id, v]) => ({ id, v })).sort((a, b) => b.v - a.v);
+  const out = []; let i = 0, j = 0;
+  while (i < deb.length && j < cre.length) { const x = r2(Math.min(deb[i].v, cre[j].v)); if (x > 0.009) out.push({ from: deb[i].id, to: cre[j].id, amount: x });
+    deb[i].v = r2(deb[i].v - x); cre[j].v = r2(cre[j].v - x); if (deb[i].v <= 0.009) i++; if (cre[j].v <= 0.009) j++; }
+  return out;
+}
+function messMonthStats(group, members, expenses, ym) {
+  const [a, b] = messMonthRange(group.cycle_day, ym); const list = expenses.filter(e => e.spent_on >= a && e.spent_on <= b);
+  const spent = r2(sum(list.map(e => +e.amount))); const budget = +group.monthly_budget || 0; const people = members.filter(m => m.active).length || 1;
+  const byCat = {}; for (const e of list) byCat[e.category || 'Other'] = r2((byCat[e.category || 'Other'] || 0) + +e.amount);
+  const byMember = {}; for (const e of list) for (const [id, s] of messShares(e, members)) byMember[id] = r2((byMember[id] || 0) + s);
+  const days = daysBetween(a, b) + 1, today = todayISO(), elapsed = today < a ? 0 : today > b ? days : daysBetween(a, today) + 1;
+  const pace = elapsed ? r2(spent / elapsed * days) : 0;
+  return { from: a, to: b, list, spent, budget, left: r2(budget - spent), pct: budget ? spent / budget * 100 : 0, perHead: r2(spent / people), people, byCat, byMember, pace, elapsed, days };
+}
+
+/* ---- backends ---- */
+const MessCfg = () => (typeof window !== 'undefined' && window.MESS_CONFIG) || null;
+function messBackend() {
+  if (typeof window !== 'undefined' && window.__MESS_MOCK__) return MessMock;
+  const c = MessCfg(); return c && c.url && c.anon ? MessSB : null;
+}
+const MessSB = {
+  sb: null, uid: null,
+  async init() {
+    if (this.sb) return true;
+    if (!window.supabase) await loadScript('lib/supabase.js');
+    const c = MessCfg(); this.sb = window.supabase.createClient(c.url, c.anon, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'dw-mess-auth' } });
+    let { data } = await this.sb.auth.getSession();
+    if (!data.session) { const r = await this.sb.auth.signInAnonymously(); if (r.error) throw new Error(r.error.message.includes('Anonymous') ? 'Anonymous sign-ins are turned off in Supabase (Authentication → Sign In / Providers).' : r.error.message); data = r.data; }
+    this.uid = (data.session || data).user.id; return true;
+  },
+  err(r) { if (r.error) throw new Error(r.error.message); return r.data; },
+  async myGroups() { const m = this.err(await this.sb.from('mess_members').select('group_id, mess_groups(id,name,code)').eq('user_id', this.uid).eq('active', true)); return m.map(x => x.mess_groups).filter(Boolean); },
+  async createGroup(o) { return this.err(await this.sb.rpc('mess_create_group', { p_name: o.name, p_member_name: o.me, p_budget: o.budget || 0, p_currency: 'AED', p_cycle_day: o.cycleDay || 1 })); },
+  async joinGroup(code, me) { return this.err(await this.sb.rpc('mess_join_group', { p_code: code, p_member_name: me })); },
+  async load(gid) {
+    const [g, m, e, s] = await Promise.all([
+      this.sb.from('mess_groups').select('*').eq('id', gid).single(),
+      this.sb.from('mess_members').select('*').eq('group_id', gid).order('joined_at'),
+      this.sb.from('mess_expenses').select('*').eq('group_id', gid).order('spent_on', { ascending: false }).order('created_at', { ascending: false }).limit(5000),
+      this.sb.from('mess_settlements').select('*').eq('group_id', gid).order('paid_on', { ascending: false }).limit(2000)]);
+    return { group: this.err(g), members: this.err(m), expenses: this.err(e), settlements: this.err(s) };
+  },
+  async addExpense(o) { return this.err(await this.sb.from('mess_expenses').insert(o).select().single()); },
+  async updateExpense(id, o) { return this.err(await this.sb.from('mess_expenses').update(o).eq('id', id).select().single()); },
+  async deleteExpense(id) { this.err(await this.sb.from('mess_expenses').delete().eq('id', id)); },
+  async addSettlement(o) { return this.err(await this.sb.from('mess_settlements').insert(o).select().single()); },
+  async deleteSettlement(id) { this.err(await this.sb.from('mess_settlements').delete().eq('id', id)); },
+  async updateGroup(id, o) { this.err(await this.sb.from('mess_groups').update(o).eq('id', id)); },
+  async updateMember(id, o) { this.err(await this.sb.from('mess_members').update(o).eq('id', id)); },
+  async setRole(id, role) { this.err(await this.sb.rpc('mess_set_role', { p_member: id, p_role: role })); },
+  async newCode(gid) { return this.err(await this.sb.rpc('mess_new_code', { p_group: gid })); },
+  subscribe(gid, cb) {
+    const ch = this.sb.channel('mess-' + gid);
+    for (const t of ['mess_expenses', 'mess_settlements', 'mess_members']) ch.on('postgres_changes', { event: '*', schema: 'public', table: t, filter: 'group_id=eq.' + gid }, p => cb(t, p));
+    ch.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'mess_groups', filter: 'id=eq.' + gid }, p => cb('mess_groups', p));
+    ch.subscribe(); return () => this.sb.removeChannel(ch);
+  }
+};
+/* In-browser stand-in used for testing (several "users" share one localStorage) */
+const MessMock = {
+  uid: null, key: 'dw_mess_mock',
+  db() { try { return JSON.parse(localStorage.getItem(this.key)) || { g: [], m: [], e: [], s: [] }; } catch (e) { return { g: [], m: [], e: [], s: [] }; } },
+  save(d) { localStorage.setItem(this.key, JSON.stringify(d)); },
+  async init() { this.uid = new URLSearchParams(location.search).get('mockuser') || sessionStorage.getItem('mockuser') || 'u1'; sessionStorage.setItem('mockuser', this.uid); return true; },
+  isMem(d, gid) { return d.m.some(m => m.group_id === gid && m.user_id === this.uid && m.active); },
+  async myGroups() { const d = this.db(); return d.m.filter(m => m.user_id === this.uid && m.active).map(m => d.g.find(g => g.id === m.group_id)).filter(Boolean); },
+  async createGroup(o) { const d = this.db(); const g = { id: uid(), name: o.name, code: Math.random().toString(36).slice(2, 8).toUpperCase(), currency: 'AED', monthly_budget: +o.budget || 0, cycle_day: +o.cycleDay || 1, created_by: this.uid, created_at: new Date().toISOString() };
+    d.g.push(g); d.m.push({ id: uid(), group_id: g.id, user_id: this.uid, name: o.me, role: 'admin', active: true, joined_at: new Date().toISOString() }); this.save(d); return g.id; },
+  async joinGroup(code, me) { const d = this.db(); const g = d.g.find(x => x.code === code.toUpperCase().trim()); if (!g) throw new Error('No mess found with that code');
+    const ex = d.m.find(m => m.group_id === g.id && m.user_id === this.uid); if (ex) { ex.active = true; ex.name = me; } else d.m.push({ id: uid(), group_id: g.id, user_id: this.uid, name: me, role: 'member', active: true, joined_at: new Date().toISOString() }); this.save(d); return g.id; },
+  async load(gid) { const d = this.db(); if (!this.isMem(d, gid)) throw new Error('You are not a member of this mess');
+    return { group: d.g.find(g => g.id === gid), members: d.m.filter(m => m.group_id === gid), expenses: d.e.filter(e => e.group_id === gid).sort((a, b) => b.spent_on.localeCompare(a.spent_on) || b.created_at.localeCompare(a.created_at)), settlements: d.s.filter(s => s.group_id === gid) }; },
+  async addExpense(o) { const d = this.db(); if (!this.isMem(d, o.group_id)) throw new Error('Not a member'); const e = { id: uid(), created_by: this.uid, created_at: new Date().toISOString(), ...o }; d.e.push(e); this.save(d); return e; },
+  async updateExpense(id, o) { const d = this.db(); const e = d.e.find(x => x.id === id); Object.assign(e, o); this.save(d); return e; },
+  async deleteExpense(id) { const d = this.db(); d.e = d.e.filter(x => x.id !== id); this.save(d); },
+  async addSettlement(o) { const d = this.db(); const s = { id: uid(), created_by: this.uid, created_at: new Date().toISOString(), ...o }; d.s.push(s); this.save(d); return s; },
+  async deleteSettlement(id) { const d = this.db(); d.s = d.s.filter(x => x.id !== id); this.save(d); },
+  async updateGroup(id, o) { const d = this.db(); Object.assign(d.g.find(g => g.id === id), o); this.save(d); },
+  async updateMember(id, o) { const d = this.db(); Object.assign(d.m.find(m => m.id === id), o); this.save(d); },
+  async setRole(id, role) { const d = this.db(); d.m.find(m => m.id === id).role = role; this.save(d); },
+  async newCode(gid) { const d = this.db(); const g = d.g.find(x => x.id === gid); g.code = Math.random().toString(36).slice(2, 8).toUpperCase(); this.save(d); return g.code; },
+  subscribe(gid, cb) { const f = e => { if (e.key === this.key) cb('mock', {}); }; window.addEventListener('storage', f); return () => window.removeEventListener('storage', f); }
+};
+
+if (false) module.exports = { messBalances, messSettleUp, messMonthStats, messShares, messMonthRange, messCycleOf };
+</script>
 <script>/* ===== UI layer ===== */
 let S = null;                       // app state
 const V = { page:'dashboard', ym:null, money:{ tab:'all', q:'', cat:'', acct:'', range:'month' }, rep:{ kind:'month', key:null }, chat:[], invTab:'holdings' };
@@ -1108,6 +1219,7 @@ const IC = {
   accounts:'<path d="M3 9l9-5 9 5v1H3zM5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   subs:'<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  mess:'<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M15.5 14.2c2.6-.3 4.6 1.2 5.2 4"/>',
   more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon:'<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
@@ -1115,7 +1227,7 @@ const IC = {
 };
 const ico = (k, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${IC[k]||''}</svg>`;
 const PAGES = [
-  ['dashboard','Dashboard'],['money','Income & Expenses'],['subs','Subscriptions'],['budgets','Budgets'],['cards','Credit Cards'],['loans','Loans & EMI'],['goals','Savings Goals'],
+  ['dashboard','Dashboard'],['money','Income & Expenses'],['mess','Mess group'],['subs','Subscriptions'],['budgets','Budgets'],['cards','Credit Cards'],['loans','Loans & EMI'],['goals','Savings Goals'],
   ['invest','Investments'],['reports','Reports'],['assistant','AI Assistant'],['alerts','Reminders'],['accounts','Accounts'],['settings','Settings']
 ];
 const CAT_ICON = {'Rent & Housing':'🏠','Groceries':'🛒','Restaurants & Dining':'🍽️','Transportation':'🚕','Fuel':'⛽','Salik & Darb':'🛣️','Electricity & Water':'💡','Internet & Mobile':'📶','Shopping':'🛍️','Healthcare':'🩺','Family':'👨‍👩‍👧','Education':'🎓','Entertainment':'🎬','Travel':'✈️','Subscriptions':'🔁','Loan EMI':'🏦','Bank Fees':'🧾','Other':'📦',
@@ -1419,7 +1531,7 @@ function shell() {
   <button class="icon-btn" data-act="go" data-p="alerts" aria-label="Reminders">${ico('alerts')}<span class="dot" id="bell" hidden></span></button>
   <button class="icon-btn" data-act="theme" aria-label="Toggle theme" id="themeBtn"></button>
   <button class="btn pri hide-m" data-act="addTx">+ Add</button></header><main class="content" id="view"></main></div></div>
-  <nav class="bnav">${[['dashboard','Home'],['money','Money'],['subs','Subs'],['cards','Cards'],['more','More']].map(([k,l]) => `<button data-act="${k==='more'?'more':'go'}" data-p="${k}" id="bn_${k}">${ico(k)}${l}</button>`).join('')}</nav>
+  <nav class="bnav">${[['dashboard','Home'],['money','Money'],['mess','Mess'],['cards','Cards'],['more','More']].map(([k,l]) => `<button data-act="${k==='more'?'more':'go'}" data-p="${k}" id="bn_${k}">${ico(k)}${l}</button>`).join('')}</nav>
   <button class="fab" data-act="addTx" aria-label="Add transaction">+</button>`;
   $('#curSel').onchange = e => { S.settings.currency = e.target.value; commit(); };
   setSync(PST.status || (PST.mode === 'cloud' ? 'Saved' : 'Saved on this device'), PST.mode === 'cloud' ? 'ok' : 'loc');
@@ -1429,14 +1541,14 @@ function applyTheme() {
   const t = S?.settings.theme === 'auto' || !S ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : S.settings.theme;
   document.documentElement.dataset.theme = t; const b = $('#themeBtn'); if (b) b.innerHTML = ico(t === 'dark' ? 'sun' : 'moon');
 }
-const MONTH_PAGES = ['dashboard','budgets','money'];
+const MONTH_PAGES = ['dashboard','budgets','money','mess'];
 function render() {
   setCycleDay(S.settings.cycleDay || 1);
   while (charts.length) charts.pop().destroy();
   const p = V.page; const title = PAGES.find(x => x[0] === p)?.[1] || (p === 'sms' ? 'Import bank SMS' : '');
   $('#ptitle').textContent = p === 'dashboard' ? (S.settings.name ? `Hi, ${S.settings.name}` : 'Overview') : title;
   $$('.nav').forEach(n => n.classList.toggle('on', n.dataset.p === p));
-  $$('.bnav button').forEach(n => n.classList.toggle('on', n.dataset.p === p || (n.dataset.p === 'more' && !['dashboard','money','subs','cards'].includes(p))));
+  $$('.bnav button').forEach(n => n.classList.toggle('on', n.dataset.p === p || (n.dataset.p === 'more' && !['dashboard','money','mess','cards'].includes(p))));
   const mp = $('#mpick');
   mp.innerHTML = MONTH_PAGES.includes(p) ? `<div class="mpick"><button data-act="mprev" aria-label="Previous month">‹</button><span title="${esc(cycleLabel(V.ym))}">${ymLabel(V.ym)}</span><button data-act="mnext" aria-label="Next month">›</button></div>` : '';
   const L = ledger(S); const due = reminders(S, L, +S.settings.remindDays || 5).length + budgetStatus(S, cycleOf(todayISO())).rows.filter(r => r.status === 'over').length;
@@ -1476,7 +1588,7 @@ function guilloche() {
 }
 
 /* ---------- motion helpers ---------- */
-const APP_VERSION = '2026.11.15-d';
+const APP_VERSION = '2026.11.15-e';
 function motionMode() { return (S && S.settings.motion) || 'full'; }
 function noMotion() { const m = motionMode(); return m === 'off' || (m === 'auto' && matchMedia('(prefers-reduced-motion: reduce)').matches); }
 function applyMotion() { document.documentElement.dataset.motion = motionMode(); }
@@ -1789,6 +1901,131 @@ async function handleIncomingSMS() {
     return;
   }
   smsAnalyse(raw); go('sms'); toast(p.ok ? 'Check this SMS before saving' : `${p.reason}`, p.ok ? 'warn' : 'info', 5000);
+}
+
+/* --- Mess group --- */
+const MX = { ready:false, busy:false, err:null, groups:[], gid: lsGet('dw_mess_gid'), data:null, tab:'purchases', api:null, unsub:null, t:null };
+const messMe = () => MX.data && MX.api ? MX.data.members.find(m => m.user_id === MX.api.uid) : null;
+const messName = id => MX.data?.members.find(m => m.id === id)?.name || 'Former member';
+const messIsAdmin = () => messMe()?.role === 'admin';
+async function messEnsure(force) {
+  if (MX.busy) return; const api = messBackend(); if (!api) return;
+  MX.busy = true; MX.err = null;
+  try {
+    MX.api = api; await api.init();
+    MX.groups = await api.myGroups();
+    if (!MX.groups.find(g => g.id === MX.gid)) MX.gid = MX.groups[0]?.id || null;
+    if (MX.gid) { lsSet('dw_mess_gid', MX.gid); MX.data = await api.load(MX.gid); messSubscribe(); } else MX.data = null;
+    MX.ready = true;
+  } catch(e) { console.error(e); MX.err = e.message || String(e); MX.ready = true; }
+  MX.busy = false; if (V.page === 'mess') render();
+}
+function messSubscribe() {
+  if (MX.unsub) { try { MX.unsub(); } catch(e) {} MX.unsub = null; }
+  const gid = MX.gid; MX.unsub = MX.api.subscribe(gid, (table, p) => {
+    if (table === 'mess_expenses' && p?.eventType === 'INSERT' && p.new && p.new.created_by !== MX.api.uid) toast(`${messName(p.new.paid_by)} added ${fmt(p.new.amount)}${p.new.item ? ', ' + p.new.item : ''}${p.new.shop ? ' at ' + p.new.shop : ''}`, 'info', 5000);
+    clearTimeout(MX.t); MX.t = setTimeout(async () => { try { MX.data = await MX.api.load(gid); if (V.page === 'mess') render(); } catch(e) {} }, 350);
+  });
+}
+async function messRun(fn, ok) { try { const r = await fn(); if (ok) toast(ok); MX.data = MX.gid ? await MX.api.load(MX.gid) : null; render(); return r; } catch(e) { console.error(e); return e.message || 'Something went wrong. Check your internet connection and try again.'; } }
+PAGE.mess = () => {
+  const api = messBackend();
+  if (!api) return `<div class="panel"><div class="ph"><h3>Mess groups</h3></div><p class="mut" style="margin:0;line-height:1.6">${IS_PWA ? 'Mess groups need the shared database to be connected. This is being set up and will switch on automatically.' : 'Mess groups are shared with your flatmates, so they work in the DirhamWise phone app.'}</p></div>`;
+  if (!MX.ready) { setTimeout(messEnsure, 0); return `<div class="panel empty"><div class="spin"></div>Connecting to your mess…</div>`; }
+  if (MX.err) return `<div class="panel"><div class="ph"><h3>Couldn't load your mess</h3></div><p class="mut" style="margin-top:0">${esc(MX.err)}</p><button class="btn pri" data-act="messRetry">Try again</button></div>`;
+  if (!MX.data) return `<div class="grid g2"><div class="panel"><div class="ph"><h3>Start a mess</h3></div><p class="mut" style="margin-top:0;line-height:1.6">Create a shared grocery budget for your flat. You'll get a code to invite everyone. Each person adds what they buy, and the app works out each person's share and who owes whom.</p><button class="btn pri" data-act="messCreate">Create a mess</button></div>
+    <div class="panel"><div class="ph"><h3>Join a mess</h3></div><p class="mut" style="margin-top:0;line-height:1.6">Got an invite code from a flatmate? Enter it to see the mess and add your purchases.</p><button class="btn" data-act="messJoin">Join with a code</button></div></div>`;
+  const { group, members, expenses, settlements } = MX.data; const me = messMe(); const act = members.filter(m => m.active);
+  const st = messMonthStats(group, members, expenses, V.ym); const B = messBalances(members, expenses, settlements); const myBal = me ? B.bal[me.id] || 0 : 0;
+  const tabs = [['purchases', 'Purchases'], ['balances', 'Balances'], ['members', `Members (${act.length})`]];
+  const usedCls = st.pct >= 100 ? 'over' : st.pct >= 80 ? 'warn' : 'ok';
+  let body = '';
+  if (MX.tab === 'purchases') {
+    body = st.list.length ? `<div class="list">${st.list.map(e => { const n = (e.split_among && e.split_among.length) || act.length;
+      return `<div class="row" data-act="messEdit" data-id="${e.id}">${mono(messName(e.paid_by), catColor(e.category === 'Groceries' ? 'Groceries' : e.category))}<div class="t"><b>${esc(e.item || e.category)}${e.shop ? `<span class="mut" style="font-weight:500">, ${esc(e.shop)}</span>` : ''}</b><small>${dshort(e.spent_on)}, paid by ${esc(messName(e.paid_by))}${me && e.paid_by === me.id ? ' (you)' : ''}, split ${n} way${n === 1 ? '' : 's'}</small></div><div class="amt">${fmt(e.amount)}</div></div>`; }).join('')}</div>`
+      : empty(`No purchases in ${ymLong(V.ym)} yet.`, 'messAdd', 'Add a purchase');
+    const cats = Object.entries(st.byCat).sort((a, b) => b[1] - a[1]);
+    if (cats.length) body += `<div style="margin-top:14px"><div class="split">${cats.map(([c, v]) => `<i style="width:${v / st.spent * 100}%;background:${catColor(c)}" title="${esc(c)}"></i>`).join('')}</div><div class="legend" style="margin-top:4px">${cats.map(([c, v]) => `<span><i style="background:${catColor(c)}"></i>${esc(c)} ${fmt(v)}</span>`).join('')}</div></div>`;
+  } else if (MX.tab === 'balances') {
+    const plan = messSettleUp(B.bal);
+    body = `<p class="mut" style="margin-top:0;font-size:13px">All-time totals. Plus means the mess owes them; minus means they owe the mess.</p><div class="scroll-x"><table class="tbl"><thead><tr><th>Member</th><th class="r">Paid</th><th class="r">Share</th><th class="r">Balance</th></tr></thead><tbody>${members.filter(m => m.active || Math.abs(B.bal[m.id] || 0) > 0.009).map(m => { const v = B.bal[m.id] || 0;
+      return `<tr><td>${esc(m.name)}${me && m.id === me.id ? ' <span class="mut">(you)</span>' : ''}</td><td class="r">${fmt(B.paid[m.id] || 0)}</td><td class="r">${fmt(B.share[m.id] || 0)}</td><td class="r ${v > 0.009 ? 'up' : v < -0.009 ? 'down' : 'mut'}"><b>${Math.abs(v) < 0.01 ? 'Settled' : fmt(v, { sign:true })}</b></td></tr>`; }).join('')}</tbody></table></div>
+      <div class="ph" style="margin-top:18px"><h3>Settle up</h3><span class="sp"></span><button class="btn sm" data-act="messSettle">Record a payment</button></div>
+      ${plan.length ? `<div class="list">${plan.map(p => `<div class="row">${mono(messName(p.from))}<div class="t"><b>${esc(messName(p.from))} pays ${esc(messName(p.to))}</b><small>${me && (p.from === me.id) ? 'You owe this' : me && p.to === me.id ? 'You receive this' : 'Between flatmates'}</small></div><div class="amt">${fmt(p.amount)}</div><button class="btn sm" data-act="messSettle" data-from="${p.from}" data-to="${p.to}" data-amt="${p.amount}">Mark paid</button></div>`).join('')}</div>` : '<div class="mut">Everyone is settled. Nothing to pay.</div>'}
+      ${settlements.length ? `<div class="ph" style="margin-top:18px"><h3>Payments recorded</h3></div><div class="list">${settlements.slice(0, 30).map(x => `<div class="row">${mono(messName(x.from_member), '#5E6B66')}<div class="t"><b>${esc(messName(x.from_member))} paid ${esc(messName(x.to_member))}</b><small>${dshort(x.paid_on)} ${x.paid_on.slice(0, 4)}${x.note ? ', ' + esc(x.note) : ''}</small></div><div class="amt">${fmt(x.amount)}</div>${x.created_by === MX.api.uid || messIsAdmin() ? `<button class="btn sm ghost" data-act="messDelSettle" data-id="${x.id}">Undo</button>` : ''}</div>`).join('')}</div>` : ''}`;
+  } else {
+    const link = `${location.origin}${location.pathname}?join=${group.code}`;
+    body = `<div class="ins info" style="align-items:center"><div style="flex:1"><div class="mut" style="font-size:12.5px">Invite code</div><div style="font-family:var(--f-num);font-size:26px;font-weight:600;letter-spacing:.12em">${esc(group.code)}</div><div class="mut" style="font-size:12.5px">Flatmates open the link or enter this code in Mess group, then Join.</div></div><div style="display:flex;flex-direction:column;gap:6px"><button class="btn pri sm" data-act="messShare">Share invite</button><button class="btn sm" data-act="messCopy" data-v="${esc(link)}">Copy link</button></div></div>
+      <div class="list" style="margin-top:6px">${members.filter(m => m.active).map(m => `<div class="row">${mono(m.name)}<div class="t"><b>${esc(m.name)}${me && m.id === me.id ? ' <span class="mut" style="font-weight:500">(you)</span>' : ''}</b><small>${m.role === 'admin' ? 'Admin' : 'Member'}, joined ${dshort(m.joined_at.slice(0, 10))}</small></div>
+        ${me && m.id === me.id ? '<button class="btn sm" data-act="messRename">Change name</button>' : messIsAdmin() ? `<button class="btn sm ghost" data-act="messRole" data-id="${m.id}" data-v="${m.role === 'admin' ? 'member' : 'admin'}">${m.role === 'admin' ? 'Remove admin' : 'Make admin'}</button><button class="btn sm ghost danger" data-act="messRemove" data-id="${m.id}">Remove</button>` : ''}</div>`).join('')}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">${messIsAdmin() ? '<button class="btn" data-act="messSettings">Mess settings</button><button class="btn" data-act="messNewCode">New invite code</button>' : ''}<button class="btn danger" data-act="messLeave">Leave this mess</button></div>`;
+  }
+  return `<div class="toolbar">${MX.groups.length > 1 ? `<select class="inp" id="messPick" style="max-width:240px">${MX.groups.map(g => `<option value="${g.id}" ${g.id === MX.gid ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>` : `<h3 style="margin:0;font-size:17px;letter-spacing:-.015em">${esc(group.name)}</h3>`}
+    <span style="flex:1"></span><button class="btn sm ghost" data-act="messJoin">Join</button><button class="btn sm ghost" data-act="messCreate">New</button><button class="btn pri" data-act="messAdd">Add purchase</button></div>
+  <div class="grid g2" style="margin-bottom:16px">
+    <div class="panel"><div class="ph"><h3>${ymLong(V.ym)}</h3><span class="sp"></span><small>${dshort(st.from)} to ${dshort(st.to)}</small></div>
+      ${st.budget ? `<div class="bar ${usedCls}" style="height:8px;margin-bottom:4px"><i style="width:${clamp(st.pct, 0, 100)}%"></i></div><div class="split-l" style="margin-bottom:6px"><span style="--c:transparent;margin-left:-13px">${pct(st.pct, 0)} of budget used</span><span style="--c:transparent">${st.elapsed && st.elapsed < st.days ? `on pace for ${fmt(st.pace)}` : ''}</span></div>` : ''}
+      <div class="st"><span class="st-l">Spent</span><span class="st-v">${num(st.spent)}</span></div>
+      ${st.budget ? `<div class="st"><span class="st-l">Budget</span><span class="st-v">${fmt(st.budget)}<small class="${st.left >= 0 ? '' : 'down'}">${st.left >= 0 ? fmt(st.left) + ' left' : fmt(-st.left) + ' over'}</small></span></div>` : ''}
+      <div class="st last"><span class="st-l">Per person<small>${st.people} member${st.people === 1 ? '' : 's'}</small></span><span class="st-v">${fmt(st.perHead)}</span></div></div>
+    <div class="panel"><div class="ph"><h3>You</h3><span class="sp"></span><small>${esc(me?.name || '')}</small></div>
+      <div class="st"><span class="st-l">Your share this month</span><span class="st-v">${num(me ? st.byMember[me.id] || 0 : 0)}</span></div>
+      <div class="st"><span class="st-l">You paid this month</span><span class="st-v">${fmt(sum(st.list.filter(e => me && e.paid_by === me.id).map(e => +e.amount)))}</span></div>
+      <div class="st last"><span class="st-l">Overall</span><span class="st-v ${myBal > 0.009 ? 'up' : myBal < -0.009 ? 'down' : ''}">${Math.abs(myBal) < 0.01 ? 'Settled' : myBal > 0 ? 'You get back ' + fmt(myBal) : 'You owe ' + fmt(-myBal)}</span></div></div>
+  </div>
+  <div class="panel"><div class="tabs" style="margin-bottom:12px">${tabs.map(([k, l]) => `<button class="${MX.tab === k ? 'on' : ''}" data-act="messTab" data-v="${k}">${l}</button>`).join('')}</div>${body}</div>`;
+};
+PAGE_AFTER.mess = () => { const p = $('#messPick'); if (p) p.onchange = async () => { MX.gid = p.value; lsSet('dw_mess_gid', MX.gid); MX.data = null; MX.ready = false; render(); await messEnsure(); }; };
+function messCreateForm() {
+  openForm({ title:'Create a mess', submit:'Create mess', values:{ name:'', me: S.settings.name || '', budget:'', cycleDay: 1 },
+    fields:[ { k:'name', label:'Mess name', req:true, ph:'e.g. Flat 302 Mess' }, { k:'me', label:'Your name (as flatmates know you)', req:true },
+      { type:'row', items:[ { k:'budget', label:'Monthly mess budget', money:true, min:0, hint:'Optional' }, { k:'cycleDay', label:'Month starts on day', type:'number', min:1, max:28, hint:'1 = calendar month' } ] } ],
+    onSubmit: async o => { if (!S.settings.name) { S.settings.name = o.me.trim(); scheduleSave(); }
+      const r = await messRun(async () => { const gid = await MX.api.createGroup({ name: o.name.trim(), me: o.me.trim(), budget: +o.budget || 0, cycleDay: +o.cycleDay || 1 }); MX.gid = gid; lsSet('dw_mess_gid', gid); MX.groups = await MX.api.myGroups(); MX.tab = 'members'; messSubscribe(); }, 'Mess created. Share the invite code with your flatmates.');
+      return typeof r === 'string' ? r : undefined; } });
+}
+function messJoinForm(code = '') {
+  openForm({ title:'Join a mess', submit:'Join', values:{ code, me: S.settings.name || '' },
+    fields:[ { k:'code', label:'Invite code', req:true, ph:'6 letters, e.g. K7PQ2D' }, { k:'me', label:'Your name (as flatmates know you)', req:true } ],
+    onSubmit: async o => { if (!S.settings.name) { S.settings.name = o.me.trim(); scheduleSave(); }
+      const r = await messRun(async () => { const gid = await MX.api.joinGroup(o.code.trim(), o.me.trim()); MX.gid = gid; lsSet('dw_mess_gid', gid); MX.groups = await MX.api.myGroups(); MX.tab = 'purchases'; messSubscribe(); }, 'You joined the mess');
+      return typeof r === 'string' ? r : undefined; } });
+}
+function messExpenseForm(e = null) {
+  const { group, members } = MX.data; const me = messMe(); const act = members.filter(m => m.active);
+  const canEdit = !e || e.created_by === MX.api.uid || messIsAdmin();
+  if (e && !canEdit) { modal(e.item || e.category, `<div class="st"><span class="st-l">Amount</span><span class="st-v">${fmt(e.amount)}</span></div><div class="st"><span class="st-l">Paid by</span><span class="st-v" style="font-size:15px">${esc(messName(e.paid_by))}</span></div><div class="st"><span class="st-l">Date</span><span class="st-v" style="font-size:15px">${dlong(e.spent_on)}</span></div>${e.shop ? `<div class="st"><span class="st-l">Shop</span><span class="st-v" style="font-size:15px">${esc(e.shop)}</span></div>` : ''}<p class="mut" style="font-size:13px">Only the person who added it or the mess admin can change it.</p>`); return; }
+  const split = new Set(e?.split_among?.length ? e.split_among : act.map(m => m.id));
+  const personal = e ? S.tx.find(t => t.messId === e.id) : null;
+  openForm({ title: e ? 'Edit purchase' : 'Add mess purchase', submit: e ? 'Save' : 'Add purchase',
+    values:{ amount: e?.amount, what: e?.item || '', category: e?.category || 'Groceries', shop: e?.shop || '', date: e?.spent_on || todayISO(), paidBy: e?.paid_by || me?.id, note: e?.note || '', mine: e ? !!personal : S.settings.messToPersonal !== false, acct: personal?.accountId || (S.accounts.find(a => a.type === 'cash') || S.accounts[0] || {}).id || '' },
+    fields:[ { type:'row', items:[ { k:'amount', label:'Amount', money:true, req:true, positive:true }, { k:'date', label:'Date', type:'date', req:true } ] },
+      { k:'what', label:'What was bought', ph:'e.g. Weekly vegetables, chicken, rice 10 kg' },
+      { type:'row', items:[ { k:'category', label:'Category', type:'select', options: MESS_CATS }, { k:'shop', label:'Shop', ph:'e.g. Lulu, Union Coop' } ] },
+      { k:'paidBy', label:'Paid by', type:'select', options: act.map(m => [m.id, m.name + (me && m.id === me.id ? ' (you)' : '')]) },
+      { k:'_split', type:'html', label:'Split between', html: `<div class="chips">${act.map(m => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" class="msplit" value="${m.id}" ${split.has(m.id) ? 'checked' : ''} style="accent-color:var(--acc)">${esc(m.name)}</label>`).join('')}</div><div class="hint" id="mshare"></div>`,
+        bind: (form) => { const upd = () => { const n = $$('.msplit:checked', form).length; const a = +form.elements.amount.value || 0; $('#mshare', form).textContent = n ? `${fmtCcy((a / n).toFixed(2), curCode())} each` : 'Pick at least one person'; }; form.addEventListener('input', upd); upd(); } },
+      { k:'note', label:'Note', ph:'Optional' },
+      ...(S.accounts.length ? [{ k:'mine', label:'Also add my share to my personal expenses', type:'check' }, { k:'acct', label:'From account', type:'select', options: () => accOpts(), show: o => o.mine }] : []) ],
+    onDelete: e ? async () => { const r = await messRun(() => MX.api.deleteExpense(e.id), 'Purchase deleted'); if (typeof r === 'string') return toast(r, 'bad'); if (personal) { S.tx = S.tx.filter(t => t !== personal); commit(); } } : null,
+    onSubmit: async o => {
+      const ids = $$('.msplit:checked').map(x => x.value); if (!ids.length) return 'Pick at least one person to split with';
+      const row = { group_id: group.id, paid_by: o.paidBy, amount: r2(o.amount), item: (o.what || '').trim(), category: o.category, shop: (o.shop || '').trim(), note: (o.note || '').trim(), spent_on: o.date, split_among: ids.length === act.length ? [] : ids };
+      let saved; const r = await messRun(async () => { saved = e ? await MX.api.updateExpense(e.id, row) : await MX.api.addExpense(row); }, e ? 'Purchase updated' : `Added ${fmt(row.amount)} to ${group.name}`);
+      if (typeof r === 'string') return r;
+      const myShare = me && ids.includes(me.id) ? r2(row.amount / ids.length) : 0;
+      if (personal && (!o.mine || !myShare)) S.tx = S.tx.filter(t => t !== personal);
+      else if (o.mine && myShare) { const base = { type:'expense', amount: myShare, date: row.spent_on, category:'Groceries', payee:`${group.name}: ${row.item || row.category}`, method:'Cash', accountId: o.acct, messId: (saved || e).id, notes:`Your share of ${fmt(row.amount)} split ${ids.length} ways` };
+        if (personal) Object.assign(personal, base); else S.tx.push({ id: uid(), created: Date.now(), ...base }); }
+      if (!e) S.settings.messToPersonal = !!o.mine;
+      commit(); } });
+}
+function messSettleForm(d = {}) {
+  const act = MX.data.members.filter(m => m.active); const me = messMe();
+  openForm({ title:'Record a payment', submit:'Record payment', values:{ from: d.from || me?.id, to: d.to || act.find(m => m.id !== me?.id)?.id, amount: d.amt ? +d.amt : '', date: todayISO(), note:'' },
+    fields:[ { type:'row', items:[ { k:'from', label:'Who paid', type:'select', options: act.map(m => [m.id, m.name]) }, { k:'to', label:'To', type:'select', options: act.map(m => [m.id, m.name]), validate: (v, o) => v === o.from ? 'Choose a different person' : null } ] },
+      { type:'row', items:[ { k:'amount', label:'Amount', money:true, req:true, positive:true }, { k:'date', label:'Date', type:'date', req:true } ] }, { k:'note', label:'Note', ph:'e.g. cash, bank transfer' } ],
+    onSubmit: async o => { const r = await messRun(() => MX.api.addSettlement({ group_id: MX.gid, from_member: o.from, to_member: o.to, amount: r2(o.amount), paid_on: o.date, note: o.note.trim() }), `Recorded: ${messName(o.from)} paid ${messName(o.to)} ${fmt(o.amount)}`); return typeof r === 'string' ? r : undefined; } });
 }
 
 /* --- Subscriptions --- */
@@ -2215,6 +2452,20 @@ function installHelp() {
 }
 
 const ACT = {
+  messRetry: () => { MX.ready = false; render(); }, messCreate: () => messCreateForm(), messJoin: () => messJoinForm(), messAdd: () => messExpenseForm(),
+  messEdit: d => messExpenseForm(MX.data.expenses.find(e => e.id === d.id)), messTab: d => { MX.tab = d.v; render(); }, messSettle: d => messSettleForm(d),
+  messDelSettle: d => confirmBox('Undo this payment record?', async () => { const r = await messRun(() => MX.api.deleteSettlement(d.id), 'Payment removed'); if (typeof r === 'string') toast(r, 'bad'); }, 'Undo'),
+  messShare: async () => { const g = MX.data.group; const link = `${location.origin}${location.pathname}?join=${g.code}`; const text = `Join our mess "${g.name}" on DirhamWise to add groceries and see who owes what. Open ${link} or use code ${g.code}.`;
+    try { if (navigator.share) { await navigator.share({ title:'Join ' + g.name, text, url: link }); return; } } catch(e) { if (e?.name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(text); toast('Invite copied. Paste it in WhatsApp.'); } catch(e) { modal('Invite', `<textarea class="inp" rows="4" readonly>${esc(text)}</textarea>`); } },
+  messCopy: async d => { try { await navigator.clipboard.writeText(d.v); toast('Link copied'); } catch(e) { modal('Invite link', `<input class="inp" readonly value="${esc(d.v)}">`); } },
+  messRename: () => { const me = messMe(); openForm({ title:'Change your name', values:{ name: me.name }, fields:[{ k:'name', label:'Name', req:true }], onSubmit: async o => { const r = await messRun(() => MX.api.updateMember(me.id, { name: o.name.trim() }), 'Name updated'); return typeof r === 'string' ? r : undefined; } }); },
+  messRole: d => { messRun(() => MX.api.setRole(d.id, d.v), d.v === 'admin' ? 'Made admin' : 'Admin removed').then(r => typeof r === 'string' && toast(r, 'bad')); },
+  messRemove: d => confirmBox(`Remove ${messName(d.id)} from the mess? Their past purchases stay in the records.`, async () => { const r = await messRun(() => MX.api.updateMember(d.id, { active: false }), 'Member removed'); if (typeof r === 'string') toast(r, 'bad'); }, 'Remove'),
+  messLeave: () => confirmBox('Leave this mess? You can rejoin later with the invite code.', async () => { const me = messMe(); const r = await messRun(async () => { await MX.api.updateMember(me.id, { active: false }); MX.groups = await MX.api.myGroups(); MX.gid = MX.groups[0]?.id || null; lsSet('dw_mess_gid', MX.gid || ''); if (MX.gid) messSubscribe(); }, 'You left the mess'); if (typeof r === 'string') toast(r, 'bad'); }, 'Leave'),
+  messNewCode: () => confirmBox('Create a new invite code? The old code and link will stop working.', async () => { const r = await messRun(() => MX.api.newCode(MX.gid), 'New invite code created'); if (typeof r === 'string') toast(r, 'bad'); }, 'Create new code'),
+  messSettings: () => { const g = MX.data.group; openForm({ title:'Mess settings', values:{ name: g.name, budget: +g.monthly_budget, cycleDay: g.cycle_day }, fields:[ { k:'name', label:'Mess name', req:true }, { type:'row', items:[ { k:'budget', label:'Monthly budget', money:true, min:0 }, { k:'cycleDay', label:'Month starts on day', type:'number', min:1, max:28 } ] } ],
+    onSubmit: async o => { const r = await messRun(() => MX.api.updateGroup(g.id, { name: o.name.trim(), monthly_budget: +o.budget || 0, cycle_day: +o.cycleDay || 1 }), 'Mess updated'); return typeof r === 'string' ? r : undefined; } }); },
   installLater: () => { lsSet('dw_install_dismissed', String(Date.now())); render(); },
   catAll: () => { V.catAll = !V.catAll; render(); },
   catDrill: d => { V.money = { ...V.money, tab:'expense', cat: d.cat, range:'month', q:'', acct:'' }; go('money'); },
@@ -2236,8 +2487,8 @@ const ACT = {
   install: () => installHelp(),
   go: d => go(d.p), closeModal, mprev: () => { V.ym = ymAdd(V.ym, -1); render(); }, mnext: () => { V.ym = ymAdd(V.ym, 1); render(); },
   theme: () => { const cur = document.documentElement.dataset.theme; S.settings.theme = cur === 'dark' ? 'light' : 'dark'; commit(); },
-  more: () => { const sc = modal('More', `<div class="list">${PAGES.filter(p => !['dashboard','money','subs','cards'].includes(p[0])).map(([k, l]) => `<button class="nav" data-act="go" data-p="${k}" style="padding:13px 10px">${ico(k)}<span>${l}</span></button>`).join('')}</div>`); sc.addEventListener('click', e => { if (e.target.closest('[data-act=go]')) closeModal(); }); },
-  addTx: d => txForm(d.type || 'expense', null, d.cat ? { category: d.cat } : {}),
+  more: () => { const sc = modal('More', `<div class="list">${PAGES.filter(p => !['dashboard','money','mess','cards'].includes(p[0])).map(([k, l]) => `<button class="nav" data-act="go" data-p="${k}" style="padding:13px 10px">${ico(k)}<span>${l}</span></button>`).join('')}</div>`); sc.addEventListener('click', e => { if (e.target.closest('[data-act=go]')) closeModal(); }); },
+  addTx: d => (V.page === 'mess' && MX.data && !d.type) ? messExpenseForm() : txForm(d.type || 'expense', null, d.cat ? { category: d.cat } : {}),
   editTx: d => { const t = S.tx.find(x => x.id === d.id); if (!t) return; if (t.type.startsWith('invest')) tradeForm(null, null, t); else txForm(t.type, t); },
   mtab: d => { V.money.tab = d.v; V.money.cat = ''; V.money.limit = 150; render(); }, moreTx: () => { V.money.limit = (V.money.limit || 150) + 150; render(); },
   addBudget: () => budgetForm(), editBudget: d => budgetForm(d.cat),
@@ -2269,6 +2520,7 @@ function startApp(msg) {
   render(); scheduleSave();
   if (msg) toast(msg, 'info', 5000);
   handleIncomingSMS();
+  const jc = sessionStorage.getItem('dw_join'); if (jc) { sessionStorage.removeItem('dw_join'); go('mess'); setTimeout(() => { if (MX.ready && MX.data && MX.data.group.code === jc) return; messJoinForm(jc); }, 600); }
   if (created) toast(`${created} recurring transaction${created > 1 ? 's' : ''} added for this period`, 'info');
   const due = viaSMS ? [] : reminders(S, ledger(S), +S.settings.remindDays || 5); if (due.length) setTimeout(() => toast(`${due.length} payment${due.length > 1 ? 's' : ''} due soon: ${due.slice(0,3).map(r => r.title).join(', ')}${due.length > 3 ? '…' : ''}`, 'warn', 6000), 800);
 }
@@ -2276,6 +2528,7 @@ window.addEventListener('hashchange', () => { const h = location.hash.slice(1); 
 matchMedia('(prefers-color-scheme: light)').addEventListener?.('change', () => { if (S) { applyTheme(); render(); } });
 async function boot() {
   applyTheme();
+  { const q = new URLSearchParams(location.search); const jc = q.get('join'); if (jc) { sessionStorage.setItem('dw_join', jc.toUpperCase()); try { history.replaceState(null, '', location.pathname + '#mess'); } catch(e) {} } }
   if (IS_PWA) {
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
       const hadController = !!navigator.serviceWorker.controller; let reloaded = false;
@@ -2292,6 +2545,7 @@ async function boot() {
   if (IS_PWA) PST.mode = 'local';
   if (!st && PST.mode === 'cloud') { const raw = lsGet(LS_KEY); if (raw) try { st = JSON.parse(raw); } catch(e) {} }
   if (st) { S = Object.assign(emptyState(), st); S.settings = Object.assign(emptyState().settings, st.settings || {}); S.settings.rates = Object.assign({ ...DEFAULT_RATES }, S.settings.rates || {}); return startApp(); }
+  if (sessionStorage.getItem('dw_join')) { S = emptyState(); return startApp(); }
   S = null; applyTheme();
   document.body.innerHTML = `<div class="onb"><section class="note draw">${guilloche()}<div class="nh"><span>DirhamWise</span></div><div class="big" style="font-size:34px">AED 0.00</div><div class="chg">Your net worth, once you add an account</div></section>
   <h2>Know where every dirham goes</h2><p>Track income, spending, budgets, credit cards, loans, savings goals and investments in one place. Built for life in the UAE: salary-to-salary months, DEWA and ADDC, Salik and Darb, UAE banks and cards.</p>
