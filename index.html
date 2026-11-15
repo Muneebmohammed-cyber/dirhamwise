@@ -276,6 +276,16 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
 html[data-motion=off] *,html[data-motion=off] *::before,html[data-motion=off] *::after{animation:none!important;transition:none!important}
 @media (prefers-reduced-motion:reduce){html[data-motion=auto] *,html[data-motion=auto] *::before,html[data-motion=auto] *::after{animation:none!important;transition:none!important}}
 
+/* screenshot import */
+.shotedit{display:grid;grid-template-columns:minmax(0,1fr) 110px;gap:6px}
+.shotedit .inp{padding:6px 9px;font-size:13px}
+.shotedit .num{text-align:right;font-variant-numeric:tabular-nums}
+@media(min-width:700px){.shotedit{grid-template-columns:minmax(0,1fr) 110px 150px 150px}}
+#ocrbar{position:fixed;left:50%;bottom:calc(88px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:90;width:min(420px,calc(100% - 32px));background:var(--ink,#15201C);color:#fff;border-radius:14px;padding:12px 14px;box-shadow:0 10px 30px rgba(21,32,28,.25);font-size:13px}
+#ocrbar .ob-track{height:4px;border-radius:4px;background:rgba(255,255,255,.18);margin-top:8px;overflow:hidden}
+#ocrbar i{display:block;height:100%;background:#3FBF8F;border-radius:4px;transition:width .3s ease}
+label.btn{cursor:pointer}
+
 @media (display-mode: standalone){body{-webkit-user-select:none;user-select:none;overscroll-behavior-y:none}input,textarea{-webkit-user-select:text;user-select:text}}
 </style></head><body>
 <script>/* ===== Finance engine: pure logic, no DOM ===== */
@@ -895,7 +905,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = { generate
 </script>
 <script>/* ===== Bank SMS reader (runs on-device, no network) ===== */
 const MERCHANT_CATS = [
-  [/noon|namshi|amazon|amzn|shein|centrepoint|max fashion|h&m|zara|ikea|home centre|sharaf|jumbo|virgin megastore|mall/i, 'Shopping'],
+  [/noon|namshi|amazon|amzn|shein|centrepoint|max fashion|h&m|zara|ikea|home centre|sharaf|jumbo|virgin megastore/i, 'Shopping'],
   [/carrefour|lulu|spinneys|union ?coop|choithrams|waitrose|kibsons|grandiose|al maya|west zone|nesto|viva|instashop|grocer/i, 'Groceries'],
   [/talabat|deliveroo|careem ?food|noon ?food|zomato|starbucks|costa|tim hortons|mcdonald|kfc|burger|pizza|shake shack|restaur|cafe|coffee|cafeteria|kitchen|grill|bakery|shawarma|biryani|karak|chai|majlis|mandi|bistro|diner|eatery|food|dunkin|subway|hardee/i, 'Restaurants & Dining'],
   [/careem|uber|hala|rta|nol|taxi|yango|bolt|parkin|mawaqif|parking/i, 'Transportation'],
@@ -908,6 +918,7 @@ const MERCHANT_CATS = [
   [/emirates airline|flydubai|etihad airways|air arabia|booking\.com|agoda|airbnb|expedia|hotel|wego/i, 'Travel'],
   [/vox|reel cinemas|novo|cinema|dubai parks|img worlds|ferrari world|playstation|steam|xbox/i, 'Entertainment'],
   [/school|university|tuition|gems|udemy|coursera/i, 'Education'],
+  [/\bmall\b/i, 'Shopping'],
 ];
 const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12 };
 function smsHash(text) { let h = 5381; const s = String(text).replace(/\s+/g, ' ').trim(); for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return 'h' + (h >>> 0).toString(36) + s.length; }
@@ -1027,7 +1038,7 @@ function csvRows(s) { const rows = []; let row = [], cell = '', q = false;
 
 /* Turn a parsed SMS into a transaction (or a match to an existing one). */
 function smsToTx(S, p, opts = {}) {
-  const base = { id: uid(), created: Date.now(), date: p.date, amount: p.aed, payee: p.merchant, notes: opts.keepText === false ? '' : `SMS: ${p.text.slice(0, 160)}`, sms: p.hash, source: 'sms' };
+  const base = { id: uid(), created: Date.now(), date: p.date, amount: p.aed, payee: p.merchant, notes: opts.keepText === false ? '' : p.src === 'image' ? 'From screenshot' : `SMS: ${p.text.slice(0, 160)}`, sms: p.hash, source: p.src === 'image' ? 'image' : 'sms' };
   const defAcc = (S.accounts.find(a => a.salary) || S.accounts.find(a => a.type === 'bank') || S.accounts[0] || {}).id;
   const cashAcc = (S.accounts.find(a => a.type === 'cash') || {}).id;
   switch (p.kind) {
@@ -1068,6 +1079,147 @@ function applySMS(S, p, overrides = {}) {
 }
 
 if (false) module.exports = { splitSMSText, parseSMSFile, parseSMS, applySMS, smsDuplicate, smsToTx, smsHash, guessCategory };
+
+/* ===== Screenshot / receipt reader: turns OCR words into transactions (pure, testable) ===== */
+const SHOT_MON = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12 };
+const SHOT_MONEY = /(^|[^\w.,])([+\-−–]\s?)?(?:(AED|Dhs?|د\.إ|USD|EUR|GBP|INR|SAR)\.?\s?)?([+\-−–]\s?)?(\d{1,3}(?:,\d{3})+|\d+)(?:([.,])(\d{2}))?(?![\d]|[.,]\d)(?:\s?(AED|Dhs?|USD|EUR|GBP|INR|SAR|CR|DR)\b)?/gi;
+const SHOT_BAL = /\b(bal(ance)?|avl|avail(able)?|limit|outstanding|statement|min(imum)? due|total due|points|rewards?|cashback earned)\b/i;
+const SHOT_CREDIT = /\b(credit(ed)?|received|refund(ed)?|salary|payroll|deposit(ed)?|reversal|reversed|incoming|cash ?back|inward)\b/i;
+const SHOT_CHROME = /^(transactions?|history|recent( activity| transactions)?|search|filter|all|spending|statement|view all|see all|home|cards?|accounts?|more|pay|transfer|done|back|edit|details?|pending|posted|money out|money in|insights?)$/i;
+const p2s = n => String(n).padStart(2, '0');
+
+function shotISO(y, m, d) { return `${y}-${p2s(m)}-${p2s(d)}`; }
+/* Find a date in a line; returns { date, rest, pure } or null */
+function shotDate(text, today) {
+  const t = String(text); const ty = +today.slice(0, 4);
+  const fixYear = (y, m, d) => { if (y) return +y < 100 ? 2000 + +y : +y; const s = shotISO(ty, m, d); return s > today ? ty - 1 : ty; };
+  let m, date = null, hit = '';
+  if ((m = t.match(/\b(today)\b/i))) { date = today; hit = m[0]; }
+  else if ((m = t.match(/\b(yesterday)\b/i))) { const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() - 1); date = d.toISOString().slice(0, 10); hit = m[0]; }
+  else if ((m = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/))) { date = m[0]; hit = m[0]; }
+  else if ((m = t.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/))) { let d = +m[1], mo = +m[2]; if (mo > 12 && d <= 12) [d, mo] = [mo, d]; if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) { date = shotISO(fixYear(m[3], mo, d), mo, d); hit = m[0]; } }
+  else if ((m = t.match(/\b(\d{1,2})(?:st|nd|rd|th)?[\s\-]?(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?(?:[\s\-,]+(\d{4}|\d{2}(?!:)))?\b/i))) { const mo = SHOT_MON[m[2].toLowerCase()], d = +m[1]; if (d >= 1 && d <= 31) { date = shotISO(fixYear(m[3], mo, d), mo, d); hit = m[0]; } }
+  else if ((m = t.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b/i))) { const mo = SHOT_MON[m[1].toLowerCase()], d = +m[2]; if (d >= 1 && d <= 31) { date = shotISO(fixYear(m[3], mo, d), mo, d); hit = m[0]; } }
+  if (!date) return null;
+  const rest = t.replace(hit, ' ').replace(/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?/gi, ' ').replace(/\b\d{1,2}:\d{2}(:\d{2})?\s*([ap]\.?m\.?)?/gi, ' ').replace(/[,·•|\-–]/g, ' ').trim();
+  return { date: date > today ? today : date, rest, pure: !/[a-z]{2}/i.test(rest), time: /\d{1,2}:\d{2}/.test(t) };
+}
+/* Money values in a line (skips balances/limits) */
+function shotAmounts(text) {
+  const out = []; let m; SHOT_MONEY.lastIndex = 0;
+  while ((m = SHOT_MONEY.exec(text))) {
+    const cur = (m[3] || (m[8] && !/^(cr|dr)$/i.test(m[8]) ? m[8] : '') || '').toUpperCase().replace(/^DHS?$|^د\.إ$/, 'AED');
+    const hasDec = !!m[7];
+    if (!hasDec && !cur) continue; // bare integers are counts, times, years
+    if (!hasDec && /^\d{4}$/.test(m[5]) && +m[5] > 1990 && +m[5] < 2100) continue;
+    const before = text.slice(Math.max(0, m.index - 24), m.index + m[1].length);
+    const sign = (m[2] || m[4] || '').trim();
+    const amount = +(m[5].replace(/,/g, '') + (hasDec ? '.' + m[7] : ''));
+    if (!(amount > 0)) continue;
+    out.push({ amount, currency: cur || 'AED', neg: /[\-−–]/.test(sign) || /^dr$/i.test(m[8] || ''), pos: sign === '+' || /^cr$/i.test(m[8] || ''), bal: SHOT_BAL.test(before), idx: m.index + m[1].length, len: m[0].length - m[1].length, hasCur: !!cur });
+  }
+  return out;
+}
+/* Group OCR words into visual rows (merchant on the left and amount on the right become one row) */
+function shotRows(words) {
+  const ws = words.filter(w => w.text && w.text.trim()).map(w => ({ text: w.text.trim(), x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1, yc: (w.bbox.y0 + w.bbox.y1) / 2, h: w.bbox.y1 - w.bbox.y0 })).sort((a, b) => a.yc - b.yc);
+  const rows = [];
+  for (const w of ws) {
+    const r = rows.find(r => Math.abs(r.yc - w.yc) < Math.max(6, Math.min(r.h, w.h) * 0.55));
+    if (r) { r.words.push(w); r.y0 = Math.min(r.y0, w.y0); r.y1 = Math.max(r.y1, w.y1); r.yc = (r.y0 + r.y1) / 2; r.h = Math.max(r.h, w.h); }
+    else rows.push({ words: [w], y0: w.y0, y1: w.y1, yc: w.yc, h: w.h });
+  }
+  rows.sort((a, b) => a.yc - b.yc);
+  for (const r of rows) { r.words.sort((a, b) => a.x0 - b.x0); r.text = r.words.map(w => w.text).join(' ').replace(/\s+/g, ' ').trim(); r.x0 = r.words[0].x0; }
+  return rows;
+}
+function shotMerchant(s) {
+  return String(s || '').replace(/\b\d{1,2}:\d{2}(:\d{2})?\s*([ap]\.?m\.?)?/gi, ' ').replace(/\b(AED|Dhs?|USD|CR|DR)\b/gi, ' ').replace(/[+\-−–]\s*$/, '').replace(/[|•·>›»<‹«©®™_=~*#@]+/g, ' ')
+    .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9).&']+$/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 60);
+}
+const SHOT_GENERIC = /^(purchase|pos|pos purchase|debit|credit|card purchase|payment|online purchase|e-?com(merce)?|transaction|txn|debit card|credit card|apple pay|google pay|samsung pay|contactless|completed|successful|pending)$/i;
+function shotItem(S, o, today) {
+  const kind = o.kind || 'purchase';
+  const rate = o.currency === 'AED' ? 1 : (S.settings.rates && S.settings.rates[o.currency]) || (typeof DEFAULT_RATES !== 'undefined' ? DEFAULT_RATES[o.currency] : null);
+  const merchant = o.merchant || ({ income:'Money received', salary:'Salary', refund:'Refund', card_payment:'Card payment' })[kind] || 'Purchase';
+  const date = o.date || today;
+  const text = `${o.mode === 'receipt' ? 'Receipt' : 'Screenshot'}: ${merchant} ${o.currency} ${o.amount.toFixed(2)} on ${date}`;
+  const p = { ok: true, src: 'image', kind, amount: o.amount, currency: o.currency, aed: rate ? Math.round(o.amount * rate * 100) / 100 : null, merchant, date, text, hash: smsHash('img|' + merchant.toLowerCase() + '|' + o.amount + '|' + date), last4: o.last4 || null, noDate: !o.date, confidence: 2 };
+  if (!rate) p.warn = `No exchange rate for ${o.currency}; set one in Settings`;
+  p.category = kind === 'purchase' || kind === 'refund' ? guessCategory(S, merchant, o.ctx || '') : kind === 'salary' ? 'Salary' : kind === 'income' ? 'Other Income' : '';
+  const l4 = o.last4 || null; const card = l4 && S.cards.find(c => String(c.last4 || '') === l4), acc = l4 && S.accounts.find(a => String(a.last4 || '') === l4);
+  if (card) p.cardId = card.id; else if (acc) p.accountId = acc.id;
+  return p;
+}
+/* Is the next row an amount with no name of its own (so the current row is its name)? */
+function shotNamesNext(n, today) {
+  if (!n) return false; const a = shotAmounts(n.text).filter(x => !x.bal); if (!a.length) return false;
+  let rest = n.text.slice(0, a[0].idx) + ' ' + n.text.slice(a[0].idx + a[0].len); const d = shotDate(rest, today); if (d) rest = d.rest;
+  rest = shotMerchant(rest); return (rest.match(/[A-Za-z]/g) || []).length < 3 || SHOT_GENERIC.test(rest);
+}
+/* Main entry: rows from shotRows → { mode, items:[parsed like parseSMS + src:'image'] } */
+function parseShot(S, rows, today = todayISO()) {
+  const all = rows.map(r => r.text).join('\n');
+  const l4m = all.match(/(?:ending(?: with| in)?|card(?: no\.?)?|a\/c|x{2,}|\*{2,}|•{2,})\s*[:\-]?\s*[x*•]*\s*(\d{4})\b/i); const last4 = l4m ? l4m[1] : null;
+  // 1) Screenshot of bank SMS messages: whole sentences → reuse the SMS reader
+  const sentencey = /(purchase of|spent|has been (debited|credited)|was (debited|used)|debited (from|with)|credited (to|with)|transaction of|txn of|dear (customer|card ?member)|avl\.? ?(cr|bal)|available (credit|balance|limit)|card ending)/i;
+  if (sentencey.test(all)) {
+    const paras = []; let cur = null;
+    for (const r of rows) { if (cur && r.y0 - cur.y1 < cur.h * 0.9) { cur.text += ' ' + r.text; cur.y1 = r.y1; } else { cur = { text: r.text, y1: r.y1, h: r.h }; paras.push(cur); } }
+    const msgs = splitSMSText(paras.map(p => p.text).join('\n\n'));
+    const items = msgs.map(m => parseSMS(S, m, today)).filter(p => p.ok).map(p => ({ ...p, src: 'image' }));
+    if (items.length) return { mode: 'sms', items };
+  }
+  // 2) Receipt: one purchase, take the total
+  const totalRe = /\b(grand total|total amount|net (total|amount|payable)|amount (due|payable|paid)|total (incl|inc|aed|payable|due)|total)\b/i;
+  const receiptish = /\b(tax invoice|receipt|trn|vat|subtotal|sub total|cashier|qty|change due|thank you for shopping|invoice no)\b/i.test(all);
+  const totalRows = rows.filter(r => totalRe.test(r.text) && !/\bsub ?-?total\b/i.test(r.text) && shotAmounts(r.text).length);
+  if (receiptish && totalRows.length) {
+    const pick = totalRows.find(r => /grand total|net (total|amount|payable)|amount (due|payable|paid)|total (incl|inc|payable|due)/i.test(r.text)) || totalRows[totalRows.length - 1];
+    const amts = shotAmounts(pick.text); const a = amts[amts.length - 1];
+    const head = rows.slice(0, 6).map(r => shotMerchant(r.text)).find(t => (t.match(/[A-Za-z]/g) || []).length >= 3 && !/tax invoice|receipt|invoice|welcome|trn|tel|phone|www\.|@/i.test(t));
+    const dd = rows.map(r => shotDate(r.text, today)).find(Boolean);
+    return { mode: 'receipt', items: [shotItem(S, { mode: 'receipt', amount: a.amount, currency: a.currency, merchant: head || 'Shop receipt', date: dd && dd.date, last4, ctx: all }, today)] };
+  }
+  // 3) Transaction list (bank / card app, Apple/Google Pay history, statement page)
+  const items = []; let curDate = null, prevRow = null, prevUsed = false, last = null;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i], t = r.text, amts = shotAmounts(t).filter(a => !a.bal);
+    const dd = shotDate(t, today);
+    if (!amts.length) {
+      if (SHOT_BAL.test(t) || SHOT_CHROME.test(t.trim())) { prevRow = null; continue; }
+      if (dd) {
+        const gap = prevRow ? r.y0 - prevRow.y1 : 999;
+        // a date just under a transaction row (small gap, or with a time / other words) belongs to it; otherwise it's a section header
+        if (last && last.row === i - 1 && !last.dated && (gap < Math.max(r.h, prevRow ? prevRow.h : 0) * 1.4 || dd.time || !dd.pure)) { last.o.date = dd.date; last.dated = true; if (!dd.pure && dd.rest && /^(card purchase|purchase|pos|debit|online)/i.test(last.o.merchant || '')) last.o.merchant = shotMerchant(dd.rest); }
+        else curDate = dd.date;
+        if (dd.pure) { prevRow = null; continue; }
+      }
+      if (last && last.row === i - 1 && SHOT_CREDIT.test(t) && last.o.kind === 'purchase' && !last.signed) last.o.kind = /refund|reversal|reversed/i.test(t) ? 'refund' : /salary|payroll/i.test(t) ? 'salary' : 'income';
+      // a small line tucked right under a transaction is its subtitle (category, card, status), not the next merchant
+      if (last && last.row === i - 1 && prevRow && r.y0 - prevRow.y1 < Math.max(r.h, prevRow.h) * 1.4 && !shotNamesNext(rows[i + 1], today)) { last.sub = true; prevRow = null; continue; }
+      prevRow = r; prevUsed = false; continue;
+    }
+    if (SHOT_BAL.test(t) && amts.length === 0) continue;
+    if (/^\s*(total|sub ?total|spent|income|money (in|out)|this month|today'?s? spend)\b/i.test(t)) { prevRow = null; continue; }
+    const a = amts.find(x => x.hasCur || x.neg || x.pos) || amts[amts.length - 1];
+    let name = shotMerchant((t.slice(0, a.idx) + ' ' + t.slice(a.idx + a.len)).replace(/\b(today|yesterday)\b/gi, ' '));
+    if (dd) name = shotMerchant(name.replace(/\b\d{1,2}(st|nd|rd|th)?[\s\-]?(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?([\s\-,]+\d{2,4})?\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(,?\s+\d{4})?\b|\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}\b/gi, ' '));
+    let fromPrev = false;
+    if ((name.match(/[A-Za-z]/g) || []).length < 3 || SHOT_GENERIC.test(name)) { if (prevRow && !prevUsed && !shotDate(prevRow.text, today)?.pure) { const pn = shotMerchant(prevRow.text); if ((pn.match(/[A-Za-z]/g) || []).length >= 3) { name = pn; fromPrev = true; } } }
+    if (!fromPrev && prevRow && !prevUsed && (name.match(/[A-Za-z]/g) || []).length >= 3 && r.y0 - prevRow.y1 < r.h * 0.5 && !SHOT_GENERIC.test(shotMerchant(prevRow.text)) && prevRow.x0 <= r.x0 + 4 && (shotMerchant(prevRow.text).match(/[A-Za-z]/g) || []).length >= 3 && !SHOT_CREDIT.test(prevRow.text)) name = shotMerchant(prevRow.text) + ' ' + name; // wrapped names
+    const ctx = [prevRow && !prevUsed ? prevRow.text : '', t, rows[i + 1] && !shotAmounts(rows[i + 1].text).length ? rows[i + 1].text : ''].join(' ');
+    let kind = 'purchase';
+    if (a.pos || (!a.neg && SHOT_CREDIT.test(ctx))) kind = /refund|reversal|reversed|cash ?back/i.test(ctx) ? 'refund' : /salary|payroll/i.test(ctx) ? 'salary' : 'income';
+    if (/payment (received|thank)|thank you for (your )?payment|card payment received/i.test(ctx)) kind = 'card_payment';
+    const o = { amount: a.amount, currency: a.currency, merchant: name, date: (dd && dd.date) || curDate, kind, last4, ctx };
+    last = { o, row: i, dated: !!(dd && dd.date), signed: a.neg || a.pos }; items.push(last);
+    prevRow = r; prevUsed = true;
+  }
+  return { mode: 'list', items: items.map(x => shotItem(S, x.o, today)) };
+}
+
+if (false) module.exports = { parseShot, shotRows, shotAmounts, shotDate };
 </script>
 <script>/* ===== Mess groups: shared grocery budget ===== */
 const MESS_CATS = ['Groceries','Vegetables & fruit','Meat & fish','Rice & staples','Gas cylinder','Drinking water','Cleaning supplies','Cook / helper','Other'];
@@ -1439,7 +1591,7 @@ function txSub(t) {
     : t.type === 'loan_payment' ? `${accName(t.accountId)} → ${loanName(t.loanId)}` : t.type === 'goal_contribution' ? `${accName(t.accountId)} → ${goalName(t.goalId)}`
     : t.type === 'goal_withdraw' ? `${goalName(t.goalId)} → ${accName(t.accountId)}` : t.type.startsWith('invest') ? `${t.qty} × ${assetName(t.assetId)}, ${accName(t.accountId)}` : '';
   const cat = t.type === 'expense' || t.type === 'income' ? t.category : TX_TYPES[t.type];
-  return `${t.date > todayISO() ? '<span class="tag info">Scheduled</span> ' : ''}${dshort(t.date)}, ${esc(cat)}${t.refund ? ' refund' : ''}, ${esc(via)}${t.source === 'sms' ? ', from SMS' : ''}${t.recurring ? ', repeats ' + t.recurring : ''}${t.auto ? ', auto' : ''}`;
+  return `${t.date > todayISO() ? '<span class="tag info">Scheduled</span> ' : ''}${dshort(t.date)}, ${esc(cat)}${t.refund ? ' refund' : ''}, ${esc(via)}${t.source === 'sms' ? ', from SMS' : t.source === 'image' ? ', from screenshot' : ''}${t.recurring ? ', repeats ' + t.recurring : ''}${t.auto ? ', auto' : ''}`;
 }
 function txSign(t) { return t.type === 'income' || t.type === 'invest_sell' || t.type === 'goal_withdraw' ? 1 : t.type === 'transfer' ? 0 : -1; }
 function txRow(t) {
@@ -1545,7 +1697,7 @@ const MONTH_PAGES = ['dashboard','budgets','money','mess'];
 function render() {
   setCycleDay(S.settings.cycleDay || 1);
   while (charts.length) charts.pop().destroy();
-  const p = V.page; const title = PAGES.find(x => x[0] === p)?.[1] || (p === 'sms' ? 'Import bank SMS' : '');
+  const p = V.page; const title = PAGES.find(x => x[0] === p)?.[1] || (p === 'sms' ? 'Import SMS & screenshots' : '');
   $('#ptitle').textContent = p === 'dashboard' ? (S.settings.name ? `Hi, ${S.settings.name}` : 'Overview') : title;
   $$('.nav').forEach(n => n.classList.toggle('on', n.dataset.p === p));
   $$('.bnav button').forEach(n => n.classList.toggle('on', n.dataset.p === p || (n.dataset.p === 'more' && !['dashboard','money','mess','cards'].includes(p))));
@@ -1588,7 +1740,7 @@ function guilloche() {
 }
 
 /* ---------- motion helpers ---------- */
-const APP_VERSION = '2026.11.15-h';
+const APP_VERSION = '2026.11.15-i';
 function motionMode() { return (S && S.settings.motion) || 'full'; }
 function noMotion() { const m = motionMode(); return m === 'off' || (m === 'auto' && matchMedia('(prefers-reduced-motion: reduce)').matches); }
 function applyMotion() { document.documentElement.dataset.motion = motionMode(); }
@@ -1771,7 +1923,7 @@ PAGE.money = L => {
     <div class="panel"><div class="ph"><h3>Expense trend</h3><span class="sp"></span><small>12 months</small></div><div class="chart sm"><canvas id="c_exp"></canvas></div>
     <div class="ph" style="margin:14px 0 8px"><h3>Possible unnecessary spending</h3></div>${flags.length ? flags.map(f => `<div class="ins warn"><div>${esc(f.text)} — <b>${fmt(f.amount)}</b>${f.base ? ` <span class="mut">(avg ${fmt(f.base)})</span>` : ''}</div></div>`).join('') : '<div class="mut" style="font-size:13px">Nothing unusual this month compared with your 3-month average.</div>'}</div></div>`;
   }
-  return `<div class="toolbar"><div class="tabs">${[['all','All'],['income','Income'],['expense','Expenses'],['moves','Transfers & payments'],['recurring','Recurring']].map(([k,l]) => `<button class="${M.tab===k?'on':''}" data-act="mtab" data-v="${k}">${l}</button>`).join('')}</div><span style="flex:1"></span><button class="btn" data-act="go" data-p="sms">Import SMS</button><button class="btn pri" data-act="addTx" data-type="${M.tab==='income'?'income':'expense'}">+ ${M.tab==='income'?'Add income':'Add expense'}</button></div>
+  return `<div class="toolbar"><div class="tabs">${[['all','All'],['income','Income'],['expense','Expenses'],['moves','Transfers & payments'],['recurring','Recurring']].map(([k,l]) => `<button class="${M.tab===k?'on':''}" data-act="mtab" data-v="${k}">${l}</button>`).join('')}</div><span style="flex:1"></span><label class="btn">From screenshot<input type="file" class="shotin" accept="image/*" multiple hidden></label><button class="btn" data-act="go" data-p="sms">Import SMS</button><button class="btn pri" data-act="addTx" data-type="${M.tab==='income'?'income':'expense'}">+ ${M.tab==='income'?'Add income':'Add expense'}</button></div>
   <div class="grid g3" style="margin-bottom:16px">${netKpis(agg, rangeLabel())}</div>
   ${extra}
   <div class="panel"><div class="toolbar"><input class="inp" id="mq" placeholder="Search transactions…" value="${esc(M.q)}" style="flex:1;min-width:160px">
@@ -1814,7 +1966,8 @@ function smsBuild(list) { // list of {text, date}
 }
 function smsAnalyse(raw) { SMSV.text = raw; smsBuild(splitSMSText(raw).map(text => ({ text, date: null }))); }
 function smsReanalyse() { // after linking cards: re-parse keeping user choices
-  for (const x of SMSV.items) { const keepCat = x.userCat ? x.p.category : null; const p = parseSMS(S, x.p.text, todayISO(), x.p.whenSent || null); if (keepCat) p.category = keepCat; if (x.p.whenSent) p.whenSent = x.p.whenSent; x.p = p; x.dup = p.ok ? smsDuplicate(S, p) : null; x.on = x.on && p.ok && x.dup?.type !== 'same'; }
+  for (const x of SMSV.items) { if (x.p.src === 'image' && !/^(Purchase of|Your|Dear|Transaction|AED)/i.test(x.p.text)) { if (x.p.last4 && !x.p.cardId && !x.p.accountId) { const c = S.cards.find(c => String(c.last4 || '') === x.p.last4), a = S.accounts.find(a => String(a.last4 || '') === x.p.last4); if (c) x.p.cardId = c.id; else if (a) x.p.accountId = a.id; } x.dup = shotDup(x.p); continue; }
+    const keepCat = x.userCat ? x.p.category : null; const p = parseSMS(S, x.p.text, todayISO(), x.p.whenSent || null); if (keepCat) p.category = keepCat; if (x.p.whenSent) p.whenSent = x.p.whenSent; if (x.p.src) p.src = x.p.src; x.p = p; x.dup = p.ok ? smsDuplicate(S, p) : null; x.on = x.on && p.ok && x.dup?.type !== 'same'; }
 }
 function smsSummary() {
   const it = SMSV.items, ok = it.filter(x => x.p.ok), sel = it.filter(x => x.on);
@@ -1822,7 +1975,7 @@ function smsSummary() {
   const spend = sum(sel.filter(x => x.p.kind === 'purchase').map(x => x.p.aed || 0));
   const unmatched = {}; for (const x of ok) if ((x.p.kind === 'purchase' || x.p.kind === 'refund') && !x.p.cardId && !x.p.accountId) { const k = x.p.last4 || 'none'; unmatched[k] = (unmatched[k] || 0) + 1; }
   const linkOpts = `<option value="">Link to…</option>${S.cards.map(c => `<option value="card:${c.id}">💳 ${esc(c.bank + ' ' + c.name)}</option>`).join('')}${S.accounts.map(a => `<option value="acc:${a.id}">🏦 ${esc(a.name)}</option>`).join('')}`;
-  return `<div class="stats" style="margin-bottom:12px"><div class="stat"><span>Messages found</span><b>${it.length}</b></div><div class="stat"><span>Selected</span><b>${sel.length}</b></div><div class="stat"><span>Purchases selected</span><b>${fmt(spend)}</b></div><div class="stat"><span>Already recorded / skipped</span><b>${dups} / ${skipped}${SMSV.ignored ? ` <span class="mut" style="font-size:11px">(+${SMSV.ignored} non-money)</span>` : ''}</b></div></div>
+  return `<div class="stats" style="margin-bottom:12px"><div class="stat"><span>Found</span><b>${it.length}</b></div><div class="stat"><span>Selected</span><b>${sel.length}</b></div><div class="stat"><span>Purchases selected</span><b>${fmt(spend)}</b></div><div class="stat"><span>Already recorded / skipped</span><b>${dups} / ${skipped}${SMSV.ignored ? ` <span class="mut" style="font-size:11px">(+${SMSV.ignored} non-money)</span>` : ''}</b></div></div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"><button class="btn sm" data-act="smsAll" data-v="1">Select all</button><button class="btn sm" data-act="smsAll" data-v="0">Select none</button>
     <select class="inp" id="smsbulkcat" style="width:auto;padding:5px 8px"><option value="">Set category for selected…</option>${EXP_CATS.map(c => `<option>${c}</option>`).join('')}</select></div>
   ${Object.keys(unmatched).length ? `<div class="ins warn"><div style="flex:1"><b>Unmatched cards</b> — link each ending once and it's remembered for future SMS:${Object.entries(unmatched).map(([k, n]) => `<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><span style="min-width:110px">${k === 'none' ? 'No card number' : 'Ending ' + esc(k)} (${n})</span><select class="inp smslink" data-l4="${esc(k)}" style="padding:5px 8px">${linkOpts}</select></div>`).join('')}</div></div>` : ''}`;
@@ -1831,19 +1984,23 @@ const KIND_LBL = { purchase:'Purchase', refund:'Refund', card_payment:'Card bill
 PAGE.sms = () => {
   const payOpts = sel => `<option value="">Choose card / account…</option>${S.cards.map(c => `<option value="card:${c.id}" ${sel === 'card:' + c.id ? 'selected' : ''}>💳 ${esc(c.bank + ' ' + c.name)}${c.last4 ? ' ··' + c.last4 : ''}</option>`).join('')}${S.accounts.map(a => `<option value="acc:${a.id}" ${sel === 'acc:' + a.id ? 'selected' : ''}>🏦 ${esc(a.name)}${a.last4 ? ' ··' + a.last4 : ''}</option>`).join('')}`;
   const ready = SMSV.items.filter(x => x.on).length;
-  return `<div class="grid g3"><div class="span2"><div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Import from bank SMS</h3><span class="sp"></span><button class="btn sm" data-act="smsPaste">Paste from clipboard</button></div>
+  return `<div class="grid g3"><div class="span2"><div class="panel" style="margin-bottom:16px"><div class="ph"><h3>From screenshots or receipts</h3></div>
+    <p class="mut" style="margin:0 0 10px;font-size:13px">Upload screenshots of your bank or card app, SMS threads, or a photo of a receipt. Every transaction in each picture is picked up, and the text is read on this device.</p>
+    <label class="btn pri">Upload screenshots<input type="file" class="shotin" accept="image/*" multiple hidden></label></div>
+  <div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Import from bank SMS</h3><span class="sp"></span><button class="btn sm" data-act="smsPaste">Paste from clipboard</button></div>
     <textarea class="inp" id="smsin" rows="6" placeholder="Paste one or many bank SMS here: copy several messages at once in your Messages app and paste them all. Each message is detected automatically.">${esc(SMSV.text)}</textarea>
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><button class="btn pri" data-act="smsRead">Read messages</button><button class="btn" data-act="smsFile">Import backup file</button>${SMSV.items.length ? '<button class="btn ghost" data-act="smsClear">Clear</button>' : ''}</div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px" class="mut">Only messages from <input type="date" class="inp" id="smssince" value="${esc(SMSV.since || '')}" style="width:auto;padding:5px 8px"> <span>onwards (optional)</span></div>
     <input type="file" id="smsfile" accept=".xml,.csv,.txt,text/xml,text/csv,text/plain" hidden>
     <div class="hint" style="margin-top:8px">Backup files: export your SMS with the free <b>SMS Backup &amp; Restore</b> app (XML), or any CSV/TXT export. Only bank money messages are picked up; personal chats are ignored and nothing leaves your phone.</div></div>
-  ${SMSV.items.length ? `<div class="panel"><div class="ph"><h3>Review</h3><span class="sp"></span><button class="btn pri" data-act="smsImport" ${ready ? '' : 'disabled'}>Import ${ready} selected</button></div>
+  ${SMSV.items.length ? `<div class="panel" id="smsreview"><div class="ph"><h3>Review</h3><span class="sp"></span><button class="btn pri" data-act="smsImport" ${ready ? '' : 'disabled'}>Import ${ready} selected</button></div>
     ${smsSummary()}
     ${SMSV.items.slice(0, SMSV.show || 100).map((x, i) => { const p = x.p; if (!p.ok) return `<div class="ins"><div><b>Skipped:</b> ${esc(p.reason)}<div class="mut" style="font-size:12px;margin-top:4px">${esc(p.text.slice(0, 140))}</div></div></div>`;
       const sel = p.cardId ? 'card:' + p.cardId : p.accountId ? 'acc:' + p.accountId : '';
       return `<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--card2)"><div style="display:flex;gap:10px;align-items:flex-start"><input type="checkbox" class="smson" data-i="${i}" ${x.on ? 'checked' : ''} style="width:18px;height:18px;margin-top:3px;accent-color:var(--acc)"><div style="flex:1;min-width:0">
-        <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.merchant)}</b><b class="${p.kind === 'purchase' ? '' : 'up'}">${p.kind === 'purchase' ? '−' : p.kind === 'card_payment' || p.kind === 'atm' ? '' : '+'}${p.aed ? fmt(p.aed) : esc(p.currency + ' ' + p.amount)}</b></div>
-        <div class="mut" style="font-size:12px;margin:3px 0 8px">${KIND_LBL[p.kind]}, ${dshort(p.date)} ${p.date.slice(0,4)}${p.currency !== 'AED' ? `, ${esc(p.currency)} ${p.amount} converted` : ''}${p.last4 ? `, card/a/c ··${p.last4}` : ''}</div>
+        ${p.src === 'image' ? `<div class="shotedit"><input class="inp shotf" data-i="${i}" data-k="merchant" value="${esc(p.merchant)}" aria-label="Description"><input class="inp shotf num" data-i="${i}" data-k="aed" type="number" step="0.01" inputmode="decimal" value="${p.aed != null ? (+p.aed).toFixed(2) : ''}" aria-label="Amount in AED"><input class="inp shotf" data-i="${i}" data-k="date" type="date" value="${esc(p.date)}" aria-label="Date"><select class="inp shotf" data-i="${i}" data-k="kind" aria-label="Type">${[['purchase','Expense'],['refund','Refund'],['income','Income'],['salary','Salary'],['card_payment','Card bill payment']].map(([k, l]) => `<option value="${k}" ${p.kind === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="mut" style="font-size:12px;margin:3px 0 8px">From ${p.shot ? 'screenshot ' + p.shot : 'screenshot'}${p.noDate ? ', no date shown in the picture: check it' : ''}${p.currency !== 'AED' ? `, ${esc(p.currency)} ${p.amount} converted` : ''}${p.last4 ? `, card/a/c ··${p.last4}` : ''}</div>` : `<div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.merchant)}</b><b class="${p.kind === 'purchase' ? '' : 'up'}">${p.kind === 'purchase' ? '−' : p.kind === 'card_payment' || p.kind === 'atm' ? '' : '+'}${p.aed ? fmt(p.aed) : esc(p.currency + ' ' + p.amount)}</b></div>
+        <div class="mut" style="font-size:12px;margin:3px 0 8px">${KIND_LBL[p.kind]}, ${dshort(p.date)} ${p.date.slice(0,4)}${p.currency !== 'AED' ? `, ${esc(p.currency)} ${p.amount} converted` : ''}${p.last4 ? `, card/a/c ··${p.last4}` : ''}</div>`}
         <div class="frow" style="gap:8px">${p.kind === 'purchase' || p.kind === 'refund' ? `<select class="inp smscat" data-i="${i}">${EXP_CATS.map(c => `<option ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select>` : '<div></div>'}<select class="inp smspay" data-i="${i}">${payOpts(sel)}</select></div>
         ${!sel && (p.kind === 'purchase' || p.kind === 'refund') ? `<div class="hint warnc" style="margin-top:6px">No card or account with ending ${esc(p.last4 || '?')}. Choose one; add the last 4 digits to the card so it's automatic next time.</div>` : ''}
         ${x.dup ? `<div class="hint ${x.dup.type === 'sub' ? '' : 'warnc'}" style="margin-top:6px">${esc(x.dup.text)}${x.dup.type === 'sub' ? ' — it will be confirmed, not added twice.' : ''}</div>` : ''}
@@ -1862,9 +2019,75 @@ PAGE_AFTER.sms = () => {
     else { for (const x of SMSV.items) if (x.p.ok && !x.p.cardId && !x.p.accountId && !x.p.last4) { if (k === 'card') x.p.cardId = id; else x.p.accountId = id; x.dup = smsDuplicate(S, x.p); } }
     render(); });
   $$('.smson').forEach(el => el.onchange = () => { SMSV.items[+el.dataset.i].on = el.checked; render(); });
+  $$('.shotf').forEach(el => el.onchange = () => { const x = SMSV.items[+el.dataset.i], k = el.dataset.k, v = el.value;
+    if (k === 'aed') { const n = Math.abs(parseFloat(v)); if (!(n > 0)) return toast('Enter an amount', 'warn'); x.p.aed = x.p.amount = n; x.p.currency = 'AED'; }
+    else if (k === 'date') { if (v) { x.p.date = v; x.p.noDate = false; } }
+    else if (k === 'merchant') { x.p.merchant = v.trim() || x.p.merchant; if (!x.userCat && (x.p.kind === 'purchase' || x.p.kind === 'refund')) x.p.category = guessCategory(S, x.p.merchant, ''); }
+    else if (k === 'kind') { x.p.kind = v; if (v === 'salary') x.p.category = 'Salary'; else if (v === 'income') x.p.category = 'Other Income'; else if (!x.p.category || /Income|Salary/.test(x.p.category)) x.p.category = guessCategory(S, x.p.merchant, ''); }
+    x.dup = shotDup(x.p); render(); });
   $$('.smscat').forEach(el => el.onchange = () => { SMSV.items[+el.dataset.i].p.category = el.value; SMSV.items[+el.dataset.i].userCat = true; });
   $$('.smspay').forEach(el => el.onchange = () => { const x = SMSV.items[+el.dataset.i]; const [k, id] = el.value.split(':'); delete x.p.cardId; delete x.p.accountId; if (k === 'card') x.p.cardId = id; else if (k === 'acc') x.p.accountId = id; x.dup = smsDuplicate(S, x.p); render(); });
 };
+/* ===== Screenshot import: on-device text recognition ===== */
+const TESS_BASE = IS_PWA ? new URL('lib/tess/', location.href).href : 'https://cdn.jsdelivr.net/npm/';
+let tessWorker = null, tessProg = null;
+async function getTess() {
+  if (tessWorker) return tessWorker;
+  if (IS_PWA) await loadScript(TESS_BASE + 'tesseract.min.js'); else await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+  const opts = IS_PWA ? { workerPath: TESS_BASE + 'worker.min.js', corePath: TESS_BASE, langPath: TESS_BASE.replace(/\/$/, ''), gzip: true } : { langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng/4.0.0_best_int', gzip: true };
+  tessWorker = await Tesseract.createWorker('eng', 1, { ...opts, logger: m => tessProg && tessProg(m) });
+  await tessWorker.setParameters({ preserve_interword_spaces: '1' });
+  return tessWorker;
+}
+async function shotCanvas(file) {
+  const bmp = await createImageBitmap(file);
+  let w = bmp.width, h = bmp.height; const k = w < 1100 ? Math.min(2, 1100 / w) : w > 2200 ? 2200 / w : 1; w = Math.round(w * k); h = Math.round(h * k);
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(bmp, 0, 0, w, h);
+  const im = g.getImageData(0, 0, w, h), d = im.data; let sumL = 0;
+  for (let i = 0; i < d.length; i += 4) { const l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; d[i] = d[i + 1] = d[i + 2] = l; sumL += l; }
+  if (sumL / (d.length / 4) < 120) for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = 255 - d[i]; // dark mode → black on white
+  g.putImageData(im, 0, 0); return c;
+}
+function tessWords(data) {
+  if (data.words && data.words.length) return data.words;
+  const out = []; for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || []) for (const w of l.words || []) out.push(w); return out;
+}
+function shotDup(p) {
+  const d = smsDuplicate(S, p); if (d && !(d.type === 'sub' && Math.abs((d.tx.amount || 0) - (p.aed || 0)) > Math.max(2, (d.tx.amount || 0) * 0.1))) return d;
+  const t = S.tx.find(t => (t.type === 'expense' || t.type === 'income') && Math.abs(Math.abs(t.amount) - (p.aed || 0)) < 0.01 && Math.abs(daysBetween(t.date, p.date)) <= (p.noDate ? 0 : 1));
+  return t ? { type: 'manual', tx: t, text: `Looks like "${t.payee || t.category}" (${dshort(t.date)}) is already recorded for the same amount` } : null;
+}
+function ocrBar(txt, pct) {
+  let el = document.getElementById('ocrbar');
+  if (txt == null) { el && el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'ocrbar'; el.innerHTML = '<div class="ob-t"></div><div class="ob-track"><i></i></div>'; document.body.appendChild(el); }
+  el.querySelector('.ob-t').textContent = txt; el.querySelector('i').style.width = Math.round((pct || 0) * 100) + '%';
+}
+async function importShots(files) {
+  files = [...files].filter(f => /^image\//.test(f.type) || /\.(png|jpe?g|webp|heic)$/i.test(f.name)); if (!files.length) return toast('Choose a screenshot or photo', 'warn');
+  if (V.page !== 'sms') go('sms');
+  let found = 0, modes = [];
+  try {
+    ocrBar('Getting the reader ready (first time only)…', 0.02);
+    tessProg = m => { if (m.status === 'loading language traineddata' || /load/i.test(m.status)) ocrBar('Getting the reader ready (first time only)…', (m.progress || 0) * 0.3); };
+    const w = await getTess();
+    for (let i = 0; i < files.length; i++) {
+      const lbl = files.length > 1 ? `Reading screenshot ${i + 1} of ${files.length}…` : 'Reading screenshot…';
+      tessProg = m => { if (m.status === 'recognizing text') ocrBar(lbl, (i + (m.progress || 0)) / files.length); };
+      ocrBar(lbl, i / files.length);
+      const c = await shotCanvas(files[i]);
+      const { data } = await w.recognize(c, {}, { blocks: true, text: true });
+      const r = parseShot(S, shotRows(tessWords(data)), todayISO()); modes.push(r.mode);
+      const have = new Set(SMSV.items.map(x => x.p.hash));
+      for (const p of r.items) { if (have.has(p.hash)) continue; have.add(p.hash); p.shot = files.length > 1 ? i + 1 : 0; const dup = shotDup(p); SMSV.items.push({ p, dup, on: p.ok && !dup, userCat: false }); found++; }
+    }
+  } catch (err) { console.error(err); ocrBar(null); return toast(navigator.onLine === false && !tessWorker ? 'The reader needs internet the first time it is used' : 'Could not read that image. Try a clearer screenshot.', 'bad', 5000); }
+  ocrBar(null); SMSV.items.sort((a, b) => (b.p.date || '').localeCompare(a.p.date || ''));
+  render(); setTimeout(() => { const el = document.getElementById('smsreview'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60);
+  if (!found) toast('No transactions found in ' + (files.length > 1 ? 'those images' : 'that image') + '. Crop to the transaction list and try again.', 'warn', 6000);
+  else toast(`Found ${found} transaction${found > 1 ? 's' : ''}${modes.includes('receipt') ? ' (receipt total)' : ''}. Check them, then import.`, 'info', 5000);
+}
+document.addEventListener('change', e => { if (e.target && e.target.classList && e.target.classList.contains('shotin')) { const f = e.target.files; if (f && f.length) importShots(f); e.target.value = ''; } });
 function smsLink() { return location.origin + location.pathname + '?sms='; }
 function smsGuide() {
   const pwa = IS_PWA;
