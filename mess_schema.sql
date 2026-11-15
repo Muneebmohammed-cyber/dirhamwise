@@ -177,3 +177,8 @@ do $$ begin
   begin alter publication supabase_realtime add table public.mess_members; exception when others then null; end;
   begin alter publication supabase_realtime add table public.mess_groups; exception when others then null; end;
 end $$;
+
+-- tighten defaults: no access for signed-out visitors, no bulk operations
+revoke all on public.mess_groups, public.mess_members, public.mess_expenses, public.mess_settlements from anon;
+revoke truncate, references, trigger on public.mess_groups, public.mess_members, public.mess_expenses, public.mess_settlements from authenticated;
+revoke insert on public.mess_groups, public.mess_members from authenticated;

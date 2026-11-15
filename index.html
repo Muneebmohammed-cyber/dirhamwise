@@ -1588,7 +1588,7 @@ function guilloche() {
 }
 
 /* ---------- motion helpers ---------- */
-const APP_VERSION = '2026.11.15-e';
+const APP_VERSION = '2026.11.15-f';
 function motionMode() { return (S && S.settings.motion) || 'full'; }
 function noMotion() { const m = motionMode(); return m === 'off' || (m === 'auto' && matchMedia('(prefers-reduced-motion: reduce)').matches); }
 function applyMotion() { document.documentElement.dataset.motion = motionMode(); }
