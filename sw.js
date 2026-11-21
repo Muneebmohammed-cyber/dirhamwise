@@ -1,4 +1,4 @@
-const V = 'dirhamwise-2026-11-15i';
+const V = 'dirhamwise-2026-11-21a';
 const TESS = 'dirhamwise-reader-v5'; // screenshot reader files, kept across app updates
 const CORE = ['./', './index.html', './manifest.webmanifest', './lib/chart.umd.js', './lib/xlsx.full.min.js', './lib/jspdf.umd.min.js', './lib/jspdf.plugin.autotable.min.js', './lib/supabase.js', './config.js', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(CORE.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())); });

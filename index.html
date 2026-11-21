@@ -286,10 +286,40 @@ html[data-motion=off] *,html[data-motion=off] *::before,html[data-motion=off] *:
 #ocrbar i{display:block;height:100%;background:#3FBF8F;border-radius:4px;transition:width .3s ease}
 label.btn{cursor:pointer}
 
+/* document wallet */
+.docgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-bottom:18px}
+@media(min-width:700px){.doccard{aspect-ratio:1.586;min-height:0}}
+.dc-top{margin-bottom:10px}
+.dochead{display:flex;align-items:baseline;gap:8px;margin:4px 2px 10px}.dochead h3{margin:0;font-size:15px}
+.doccard{all:unset;box-sizing:border-box;cursor:pointer;position:relative;display:flex;flex-direction:column;gap:4px;min-height:132px;padding:14px 16px 13px 20px;border-radius:14px;background:var(--card);border:1px solid var(--line);overflow:hidden;transition:transform .15s ease,box-shadow .15s ease}
+.doccard::before{content:"";position:absolute;inset:0 auto 0 0;width:6px;background:var(--dc)}
+.doccard::after{content:"";position:absolute;right:-30px;bottom:-40px;width:130px;height:130px;border-radius:50%;border:16px solid var(--dc);opacity:.06}
+.doccard:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(21,32,28,.08)}.doccard:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.doccard.expired{border-color:color-mix(in srgb,var(--bad) 45%,var(--line))}.doccard.due{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+.dc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:auto}
+.dc-ic{font-size:22px;line-height:1;width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:color-mix(in srgb,var(--dc,#0E6B4F) 12%,transparent)}
+.dc-ic.sm{width:32px;height:32px;font-size:17px;--dc:#0E6B4F}
+.doccard b{font-size:15.5px;line-height:1.25}.dc-no{font-family:ui-monospace,Menlo,monospace;font-size:13px;letter-spacing:.06em;color:var(--mut)}
+.dc-foot{font-size:12px;color:var(--mut)}
+.docempty{text-align:center;padding:36px 22px}.docempty h3{margin:10px 0 8px}.docempty p{max-width:520px;margin:0 auto 18px;line-height:1.55}.dz-ic{font-size:44px}
+.docthumbs{display:flex;gap:8px;flex-wrap:wrap}.docthumbs img,.docthumbs .pdf{width:84px;height:60px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--mut);background:var(--card2)}
+.docsheet .docfiles{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;margin-bottom:14px}
+.dfile{all:unset;box-sizing:border-box;cursor:pointer;flex:0 0 auto;width:150px;height:96px;border-radius:12px;border:1px solid var(--line);background:var(--card2);display:grid;place-items:center;overflow:hidden;font-weight:700;color:var(--mut)}
+.dfile img{width:100%;height:100%;object-fit:cover}.dfile.add{width:64px;font-size:26px;font-weight:400;border-style:dashed}
+.dfile .ld{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--acc);animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.dhead{display:flex;align-items:center;gap:10px;margin-bottom:10px}.dhead .sp{flex:1}
+.dline{display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}.dline span{color:var(--mut);min-width:92px}.dline b{flex:1;font-weight:600}
+.dnum{font-family:ui-monospace,Menlo,monospace;letter-spacing:.05em}
+.dnotes{white-space:pre-wrap;font-size:13.5px;line-height:1.5;padding:10px 12px;border-radius:10px;background:var(--card2);margin:8px 0}
+.docview{position:fixed;inset:0;z-index:200;background:rgba(10,14,12,.92);display:grid;place-items:center;padding:16px}
+.docview img{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px}.docview iframe{width:min(900px,100%);height:100%;border:0;background:#fff;border-radius:6px}
+.docview .icon-btn{position:absolute;top:calc(12px + env(safe-area-inset-top));right:12px;background:rgba(255,255,255,.12);color:#fff}
+
 @media (display-mode: standalone){body{-webkit-user-select:none;user-select:none;overscroll-behavior-y:none}input,textarea{-webkit-user-select:text;user-select:text}}
 </style></head><body>
 <script>/* ===== Finance engine: pure logic, no DOM ===== */
-const EXP_CATS = ['Rent & Housing','Groceries','Restaurants & Dining','Transportation','Fuel','Salik & Darb','Electricity & Water','Internet & Mobile','Shopping','Healthcare','Family','Education','Entertainment','Travel','Subscriptions','Loan EMI','Bank Fees','Other'];
+const EXP_CATS = ['Rent & Housing','Groceries','Restaurants & Dining','Transportation','Fuel','Salik & Darb','Electricity & Water','Internet & Mobile','Shopping','Healthcare','Family','Education','Entertainment','Travel','Subscriptions','Loan EMI','Govt & Visa Fees','Bank Fees','Other'];
 const INC_CATS = ['Salary','Bonus','Commission','Freelance','Rental Income','Dividends','Refund','Other Income'];
 const DISCRETIONARY = ['Restaurants & Dining','Shopping','Entertainment','Travel','Subscriptions'];
 const METHODS = ['Bank transfer','Debit card','Credit card','Cash','Apple Pay','Cheque','Direct debit'];
@@ -325,7 +355,7 @@ function emptyState() {
   return {
     v: 1,
     settings: { cycleDay:1, currency:'AED', symbol:'AED', rates:{...DEFAULT_RATES}, theme:'auto', hijri:true, islamicEvents:true, remindDays:5, salaryDay:28, name:'' },
-    accounts: [], cards: [], loans: [], goals: [], assets: [], budgets: {}, bills: [], subs: [], merchantMap: {}, smsSeen: [], tx: []
+    accounts: [], cards: [], loans: [], goals: [], assets: [], budgets: {}, bills: [], subs: [], docs: [], merchantMap: {}, smsSeen: [], tx: []
   };
 }
 
@@ -773,12 +803,14 @@ function factsSnapshot(S, ym, cur) {
     budgets: B.rows.map(r => ({ category:r.cat, limit:r2(r.effective), spent:r2(r.spent), pctUsed:r2(r.pct) })),
     debtToIncomePct: r2(D.ratio), monthlyDebtPayments: r2(D.total), savingsRateThisMonthPct: r2(m.savingsRate), healthScore: H.score,
     subscriptions: (S.subs||[]).map(x => ({ name:x.name, status:x.status||'active', cycle:x.cycle, chargeAED: subAED(S,x), monthlyAED: r2(subMonthly(S,x)), next:x.next, paidWith: x.cardId ? (S.cards.find(c=>c.id===x.cardId)||{}).name : (S.accounts.find(c=>c.id===x.accountId)||{}).name })),
-    upcoming: reminders(S, L, 30).map(r => ({ what:r.title, amount:r2(r.amount), due:r.date })) };
+    upcoming: reminders(S, L, 30).map(r => ({ what:r.title, amount:r2(r.amount), due:r.date })),
+    documents: typeof docStatus === 'function' ? (S.docs || []).map(d => ({ document: docTitle(d), type: (DOC_TYPES[d.type] || {}).label, belongsTo: d.holder || 'Me', issuedBy: d.issuer || null, expiry: d.expiry || null, status: docStatus(d).key, daysLeft: docStatus(d).days })) : [] };
 }
 
 /* ---- Deterministic answers ---- */
 function answer(S, ym, q, fmt) {
-  q = q.toLowerCase(); const L = ledger(S); const m = monthAgg(S, ym);
+  q = q.toLowerCase();
+  if (typeof docAnswer === 'function' && /passport|emirates id|\beid\b|\bvisa\b|licen[cs]e|mulkiya|registration|insurance|document|expir|renew|ejari|tenancy|warranty|labour card|work permit/.test(q)) { const a = docAnswer(S, q); if (a) return a; } const L = ledger(S); const m = monthAgg(S, ym);
   const top = (obj, n=3) => Object.entries(obj).sort((a,b)=>b[1]-a[1]).slice(0,n);
   if (/net ?worth/.test(q)) return `Your net worth is ${fmt(L.netWorth)}: assets of ${fmt(L.assets)} (cash ${fmt(L.cash)}, savings ${fmt(L.totalSavings)}, investments ${fmt(L.invValue)}) minus liabilities of ${fmt(L.liabilities)}.`;
   if (/afford|new loan/.test(q)) { const D = dti(S, L, ym); const cap = D.income * 0.5; const room = cap - D.total;
@@ -918,6 +950,7 @@ const MERCHANT_CATS = [
   [/emirates airline|flydubai|etihad airways|air arabia|booking\.com|agoda|airbnb|expedia|hotel|wego/i, 'Travel'],
   [/vox|reel cinemas|novo|cinema|dubai parks|img worlds|ferrari world|playstation|steam|xbox/i, 'Entertainment'],
   [/school|university|tuition|gems|udemy|coursera/i, 'Education'],
+  [/\bamer\b|tasheel|tadbeer|typing cent|\bicp\b|gdrfa|\bmohre\b|federal authority for identity/i, 'Govt & Visa Fees'],
   [/\bmall\b/i, 'Shopping'],
 ];
 const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12 };
@@ -1220,6 +1253,137 @@ function parseShot(S, rows, today = todayISO()) {
 }
 
 if (false) module.exports = { parseShot, shotRows, shotAmounts, shotDate };
+
+/* ===== Document wallet: types, expiry status and on-device document reading (pure, testable) ===== */
+const DOC_TYPES = {
+  eid:       { label:'Emirates ID', icon:'🪪', expiry:true, lead:60, color:'#0E6B4F', fee:'Govt & Visa Fees', tip:'Renew online through the ICP app or website, or at a typing centre. Your residence visa must be valid.' },
+  passport:  { label:'Passport', icon:'🛂', expiry:true, lead:180, color:'#23618F', fee:'Govt & Visa Fees', tip:'Many countries and visa renewals need at least 6 months of passport validity. Renew through your embassy or consulate.' },
+  visa:      { label:'Residence visa', icon:'📄', expiry:true, lead:60, color:'#6B4C7A', fee:'Govt & Visa Fees', tip:'Renewal is usually started by your employer or sponsor. Medical test and Emirates ID renewal are normally part of it.' },
+  labour:    { label:'Labour card / work permit', icon:'💼', expiry:true, lead:60, color:'#5E6B66', fee:'Govt & Visa Fees', tip:'Renewed by your employer through MOHRE, normally together with the visa.' },
+  licence:   { label:'Driving licence', icon:'🚗', expiry:true, lead:30, color:'#A8822A', fee:'Transportation', tip:'Renew on the RTA app (Dubai), TAMM (Abu Dhabi) or your emirate\'s police app. An eye test is usually required.' },
+  mulkiya:   { label:'Vehicle registration (Mulkiya)', icon:'🚙', expiry:true, lead:30, color:'#B4532A', fee:'Transportation', tip:'You need valid car insurance first; older cars may need a technical inspection. Clear any traffic fines before renewing.' },
+  carins:    { label:'Car insurance', icon:'🛡️', expiry:true, lead:30, color:'#2E7D7A', fee:'Transportation', tip:'Compare quotes a few weeks before expiry. Registration cannot be renewed without valid insurance.' },
+  healthins: { label:'Health insurance', icon:'🩺', expiry:true, lead:30, color:'#B42318', fee:'Healthcare', tip:'Usually renewed with your employer or visa. Check the card is active before hospital visits.' },
+  tenancy:   { label:'Tenancy contract (Ejari / Tawtheeq)', icon:'🏠', expiry:true, lead:60, color:'#0B4A37', fee:'Rent & Housing', tip:'Check your contract\'s notice period: many require 60 to 90 days\' notice before renewal or moving out.' },
+  tradelic:  { label:'Trade licence', icon:'🏢', expiry:true, lead:60, color:'#15201C', fee:'Govt & Visa Fees', tip:'Renew through the issuing authority or free zone portal; lease and approvals may need renewing first.' },
+  warranty:  { label:'Warranty / purchase receipt', icon:'🧾', expiry:true, lead:30, color:'#5E6B66', fee:'Shopping', tip:'Keep the receipt with the warranty card; most claims need both.' },
+  cert:      { label:'Certificate / degree', icon:'🎓', expiry:false, lead:0, color:'#6B4C7A', tip:'' },
+  bank:      { label:'Bank / loan document', icon:'🏦', expiry:false, lead:30, color:'#23618F', tip:'' },
+  other:     { label:'Other document', icon:'📁', expiry:false, lead:30, color:'#5E6B66', tip:'' },
+};
+function docDays(d, today) { return d.expiry ? daysBetween(today, d.expiry) : null; }
+/* status: expired | due (inside the reminder window) | soon (within 2× window) | ok | none */
+function docStatus(d, today = todayISO()) {
+  if (!d.expiry) return { key:'none', days:null };
+  const days = docDays(d, today), lead = +(d.lead ?? DOC_TYPES[d.type]?.lead ?? 30);
+  return { key: days < 0 ? 'expired' : days <= lead ? 'due' : days <= lead * 2 ? 'soon' : 'ok', days, lead };
+}
+function docAlerts(S, today = todayISO()) {
+  return (S.docs || []).map(d => ({ d, s: docStatus(d, today) })).filter(x => x.s.key === 'expired' || x.s.key === 'due').sort((a, b) => a.s.days - b.s.days);
+}
+function docTitle(d) { return d.title || (DOC_TYPES[d.type] || DOC_TYPES.other).label; }
+function maskNo(n) { n = String(n || '').replace(/\s+/g, ''); const al = n.replace(/[^A-Za-z0-9]/g, ''); if (al.length <= 4) return n; return '•••• ' + al.slice(-4); }
+
+/* ---- reading a photographed / scanned document ---- */
+const DOC_MON = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+function docDates(text) {
+  const out = []; let m;
+  const push = (y, mo, d, i, len) => { y = +y < 100 ? 2000 + +y : +y; if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && y > 1900 && y < 2100) out.push({ date: `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`, i, len }); };
+  const r1 = /\b(\d{1,2})\s?[\/\-.]\s?(\d{1,2})\s?[\/\-.]\s?(\d{4})\b/g; while ((m = r1.exec(text))) { let d = +m[1], mo = +m[2]; if (mo > 12 && d <= 12) [d, mo] = [mo, d]; push(m[3], mo, d, m.index, m[0].length); }
+  const r2 = /\b(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\b/g; while ((m = r2.exec(text))) push(m[1], +m[2], +m[3], m.index, m[0].length);
+  const r3 = /\b(\d{1,2})[\s\-]?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s\-,]*(\d{4})\b/gi; while ((m = r3.exec(text))) push(m[3], DOC_MON[m[2].toLowerCase().slice(0, 3)], +m[1], m.index, m[0].length);
+  const r4 = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\b/gi; while ((m = r4.exec(text))) push(m[3], DOC_MON[m[1].toLowerCase().slice(0, 3)], +m[2], m.index, m[0].length);
+  return out.sort((a, b) => a.i - b.i);
+}
+/* Machine-readable zone (passports TD3, ID cards TD1) with check digits */
+function mrzCheck(s) { const w = [7, 3, 1]; let t = 0; for (let i = 0; i < s.length; i++) { const c = s[i]; const v = c === '<' ? 0 : /\d/.test(c) ? +c : c.charCodeAt(0) - 55; t += v * w[i % 3]; } return t % 10; }
+function mrzDate(s, future) { const y = +s.slice(0, 2), m = +s.slice(2, 4), d = +s.slice(4, 6); if (!(m >= 1 && m <= 12 && d >= 1 && d <= 31)) return null; const yy = future ? 2000 + y : (y > 40 ? 1900 + y : 2000 + y); return `${yy}-${s.slice(2, 4)}-${s.slice(4, 6)}`; }
+function parseMRZ(text) {
+  const lines = String(text).toUpperCase().replace(/[«‹]/g, '<').split(/\n/).map(l => l.replace(/\s+/g, '').replace(/[^A-Z0-9<]/g, '')).filter(l => l.length >= 28 && /<</.test(l));
+  // TD3 passport: line 2 = number(9) chk nat(3) dob(6) chk sex exp(6) chk
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]; const m = l.match(/([A-Z0-9<]{9})(\d)([A-Z<]{3})(\d{6})(\d)([MF<X])(\d{6})(\d)/);
+    if (m && mrzCheck(m[7]) === +m[8]) {
+      const prev = lines[i - 1] || ''; const nm = prev.match(/^P[A-Z<]([A-Z<]{3})([A-Z<]+)/); let name = '';
+      if (nm) { const [sur, giv] = nm[2].split('<<'); name = [giv, sur].filter(Boolean).map(x => x.replace(/<+/g, ' ').trim()).join(' ').replace(/\s+/g, ' ').trim(); }
+      return { kind: 'passport', number: m[1].replace(/<+$/g, ''), numberOk: mrzCheck(m[1]) === +m[2], nationality: m[3].replace(/</g, ''), dob: mrzDate(m[4], false), expiry: mrzDate(m[7], true), name: name.replace(/\b\w/g, c => c) };
+    }
+  }
+  // TD1 ID card (Emirates ID back): line1 I?ARE + doc no ..., line2 dob chk sex exp chk nat
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]; const m = l.match(/^(\d{6})(\d)([MF<X])(\d{6})(\d)([A-Z<]{3})/);
+    if (m && mrzCheck(m[4]) === +m[5]) {
+      const l1 = lines[i - 1] || ''; const idm = l1.match(/(784\d{12})/); const l3 = lines[i + 1] || ''; let name = '';
+      if (/^[A-Z<]+$/.test(l3)) { const [sur, giv] = l3.split('<<'); name = [giv, sur].filter(Boolean).map(x => x.replace(/<+/g, ' ').trim()).join(' ').trim(); }
+      return { kind: /^I.?ARE/.test(l1) || idm ? 'eid' : 'id', number: idm ? idm[1].replace(/^(\d{3})(\d{4})(\d{7})(\d)$/, '$1-$2-$3-$4') : '', dob: mrzDate(m[1], false), expiry: mrzDate(m[4], true), name };
+    }
+  }
+  // OCR often garbles a check digit: accept a clear TD3 line with a plausible expiry
+  for (let i = 0; i < lines.length; i++) { const m = lines[i].match(/([A-Z0-9<]{8,9})\d?([A-Z<]{3})(\d{6})\d([MF<X])(\d{6})/); const exp = m && mrzDate(m[5], true);
+    if (exp && /^P/.test(lines[i - 1] || '')) return { kind: 'passport', number: m[1].replace(/<+$/g, ''), nationality: m[2].replace(/</g, ''), dob: mrzDate(m[3], false), expiry: exp, name: '', weak: true }; }
+  return null;
+}
+const DOC_KW = [
+  ['eid', /emirates\s*id|identity\s*card|resident\s*identity|federal authority for identity|\b784[\s\-]?\d{4}[\s\-]?\d{7}/i],
+  ['passport', /passport|passeport|\bP<[A-Z]{3}/i],
+  ['tenancy', /tenancy|ejari|tawtheeq|lessor|lessee|landlord|tenant/i],
+  ['carins', /(motor|vehicle|car|comprehensive|third party).{0,40}(insurance|policy)|(insurance|policy|period of insurance).{0,60}(motor|vehicle|plate)/i],
+  ['mulkiya', /vehicle (license|licence|registration)|mulkiya|chassis|plate (no|number)|registration card/i],
+  ['licence', /driving licen[cs]e|driver'?s licen[cs]e|licen[cs]e no|traffic code no/i],
+  ['healthins', /health insurance|medical insurance|insurance card|member id|\bdaman\b|\bthiqa\b|network:|tpa/i],
+  ['visa', /residence|entry permit|\bvisa\b|uid no|file no/i],
+  ['labour', /labour card|work permit|ministry of human resources|mohre|labor card/i],
+  ['tradelic', /trade licen[cs]e|commercial licen[cs]e|department of economy|economic department|free zone/i],
+  ['warranty', /warranty|guarantee|invoice|receipt|serial no/i],
+  ['cert', /certificate|degree|diploma|university|bachelor|master of|attested/i],
+  ['bank', /bank|loan|statement|account no|iban/i],
+];
+function readDocText(text, today = todayISO()) {
+  const t = String(text || ''); const flat = t.replace(/\s+/g, ' '); const out = { fields: [] };
+  const mrz = parseMRZ(t);
+  if (mrz) { out.type = mrz.kind === 'passport' ? 'passport' : mrz.kind === 'eid' ? 'eid' : null; if (mrz.number) out.number = mrz.number; if (mrz.expiry) out.expiry = mrz.expiry; if (mrz.name) out.name = mrz.name.replace(/\w\S*/g, w => w[0] + w.slice(1).toLowerCase()); out.dob = mrz.dob; out.mrz = true; }
+  if (!out.type) for (const [k, re] of DOC_KW) if (re.test(flat)) { out.type = k; break; }
+  // number
+  if (!out.number) {
+    const eid = flat.match(/\b784[\s\-]?\d{4}[\s\-]?\d{7}[\s\-]?\d\b/); if (eid && (!out.type || out.type === 'eid')) { out.number = eid[0].replace(/\D/g, '').replace(/^(\d{3})(\d{4})(\d{7})(\d)$/, '$1-$2-$3-$4'); out.type = out.type || 'eid'; }
+  }
+  if (!out.number) {
+    const lab = flat.match(/\b(?:passport|licen[cs]e|policy|permit|contract|registration|card|certificate|member|id|uid|file|card)\s*(?:no|number|#|num)\.?\s*[:\-]?\s*([A-Z0-9][A-Z0-9\/\-]{4,24})/i)
+      || flat.match(/\b(?:no|number)\.?\s*[:\-]\s*([A-Z0-9][A-Z0-9\/\-]{4,24})/i);
+    if (lab && /\d/.test(lab[1])) out.number = lab[1].replace(/[\-\/]$/, '');
+  }
+  // expiry: the date after an expiry label, else the latest future date
+  if (!out.expiry) {
+    const ds = docDates(flat); const lab = /(expiry|expires?|exp\.?\s*date|date of expiry|valid (until|till|up ?to|thru)|validity|end date|to date|renewal date|expiration)/ig; let m, best = null;
+    while ((m = lab.exec(flat))) { const after = ds.find(d => d.i >= m.index && d.i - m.index < 60); if (after) { best = after.date; break; } }
+    if (!best) { const fut = ds.filter(d => d.date > today).sort((a, b) => b.date.localeCompare(a.date)); if (fut.length && out.type && (DOC_TYPES[out.type] || {}).expiry) best = fut[0].date; }
+    if (best) out.expiry = best;
+    const iss = flat.match(/(issue date|date of issue|issued on|issuing date|start date|from date)/i); if (iss) { const d = ds.find(d => d.i >= iss.index && d.i - iss.index < 60); if (d) out.issued = d.date; }
+  }
+  if (!out.name) { const nm = flat.match(/\b(?:[Nn]ame|NAME)\s*[:\-]?\s*([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,4})/); if (nm) { const n = nm[1].split(/\s(?:Date|Nationality|Sex|Gender|ID|Card|Expiry|Issu\w*|Place|Number|No)\b/)[0].trim(); if (n.split(' ').length >= 2) out.name = n; } }
+  if (/policy|insur/i.test(flat)) { const ins = flat.match(/\b(AXA|GIG|Oman Insurance|Sukoon|Orient|RSA|Salama|Tokio Marine|Daman|Thiqa|Adamjee|Noor Takaful|Watania|Al Sagr|Al Ain Ahlia|Union Insurance|Dubai Insurance|Abu Dhabi National Insurance|ADNIC|MetLife|Cigna|Bupa|NextCare|Neuron|Nas)\b/i); if (ins) out.issuer = ins[1]; }
+  for (const k of ['type', 'number', 'expiry', 'issued', 'name', 'issuer']) if (out[k]) out.fields.push(k);
+  return out;
+}
+
+/* Plain-language answers for the assistant */
+function docAnswer(S, q, today = todayISO()) {
+  const docs = S.docs || []; q = q.toLowerCase();
+  if (!docs.length) return /document|expir|renew/.test(q) ? 'No documents are saved yet. Open Documents and add a photo of your Emirates ID, passport, visa or licence to get expiry reminders.' : null;
+  const byType = [['eid', /emirates id|\beid\b|identity/], ['passport', /passport/], ['visa', /\bvisa\b|residen/], ['labour', /labour|work permit/], ['licence', /driving|licen[cs]e/], ['mulkiya', /mulkiya|registration/], ['carins', /car insurance|motor/], ['healthins', /health|medical/], ['tenancy', /tenancy|ejari|contract|rent/], ['warranty', /warranty/]];
+  const want = byType.filter(([, re]) => re.test(q)).map(([k]) => k); if (/insurance/.test(q) && !want.length) want.push('carins', 'healthins');
+  const nice = x => new Date(x + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const line = d => { const s = docStatus(d, today); const who = d.holder && d.holder !== 'Me' ? ` (${d.holder})` : '';
+    return !d.expiry ? `${docTitle(d)}${who}: no expiry date saved` : s.key === 'expired' ? `${docTitle(d)}${who} expired on ${nice(d.expiry)}, ${-s.days} days ago` : `${docTitle(d)}${who} expires on ${nice(d.expiry)}, in ${s.days} days`; };
+  if (want.length) { const hit = docs.filter(d => want.includes(d.type)); if (!hit.length) return `I don't have a ${want.map(k => DOC_TYPES[k].label).join(' or ')} saved. Add it in Documents to track its expiry.`;
+    return hit.map(line).join('. ') + '.' + (hit.some(d => ['expired', 'due'].includes(docStatus(d, today).key)) ? ' ' + (DOC_TYPES[hit[0].type].tip || '') : ''); }
+  const m = q.match(/(\d+)\s*(day|month)/); const horizon = m ? +m[1] * (m[2] === 'month' ? 30 : 1) : /year/.test(q) ? 365 : 90;
+  const soon = docs.filter(d => d.expiry && docStatus(d, today).days <= horizon).sort((a, b) => a.expiry.localeCompare(b.expiry));
+  if (!soon.length) return `Nothing expires in the next ${horizon} days. ${docs.filter(d => d.expiry).length} of your ${docs.length} documents have an expiry date saved; the next is ${(docs.filter(d => d.expiry).sort((a, b) => a.expiry.localeCompare(b.expiry))[0] || {}).expiry ? line(docs.filter(d => d.expiry).sort((a, b) => a.expiry.localeCompare(b.expiry))[0]) : 'not set'}.`;
+  return `In the next ${horizon} days: ${soon.map(line).join('; ')}.`;
+}
+
+if (false) module.exports = { docAnswer, readDocText, parseMRZ, docStatus, docAlerts, DOC_TYPES };
 </script>
 <script>/* ===== Mess groups: shared grocery budget ===== */
 const MESS_CATS = ['Groceries','Vegetables & fruit','Meat & fish','Rice & staples','Gas cylinder','Drinking water','Cleaning supplies','Cook / helper','Other'];
@@ -1371,6 +1535,7 @@ const IC = {
   accounts:'<path d="M3 9l9-5 9 5v1H3zM5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   subs:'<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+  docs:'<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="11" r="2"/><path d="M5.5 16c.5-1.6 1.6-2.4 3-2.4s2.5.8 3 2.4M14 10h4M14 13.5h4"/>',
   mess:'<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M15.5 14.2c2.6-.3 4.6 1.2 5.2 4"/>',
   more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -1379,10 +1544,10 @@ const IC = {
 };
 const ico = (k, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${IC[k]||''}</svg>`;
 const PAGES = [
-  ['dashboard','Dashboard'],['money','Income & Expenses'],['mess','Mess group'],['subs','Subscriptions'],['budgets','Budgets'],['cards','Credit Cards'],['loans','Loans & EMI'],['goals','Savings Goals'],
+  ['dashboard','Dashboard'],['money','Income & Expenses'],['mess','Mess group'],['docs','Documents'],['subs','Subscriptions'],['budgets','Budgets'],['cards','Credit Cards'],['loans','Loans & EMI'],['goals','Savings Goals'],
   ['invest','Investments'],['reports','Reports'],['assistant','AI Assistant'],['alerts','Reminders'],['accounts','Accounts'],['settings','Settings']
 ];
-const CAT_ICON = {'Rent & Housing':'🏠','Groceries':'🛒','Restaurants & Dining':'🍽️','Transportation':'🚕','Fuel':'⛽','Salik & Darb':'🛣️','Electricity & Water':'💡','Internet & Mobile':'📶','Shopping':'🛍️','Healthcare':'🩺','Family':'👨‍👩‍👧','Education':'🎓','Entertainment':'🎬','Travel':'✈️','Subscriptions':'🔁','Loan EMI':'🏦','Bank Fees':'🧾','Other':'📦',
+const CAT_ICON = {'Rent & Housing':'🏠','Groceries':'🛒','Restaurants & Dining':'🍽️','Transportation':'🚕','Fuel':'⛽','Salik & Darb':'🛣️','Electricity & Water':'💡','Internet & Mobile':'📶','Shopping':'🛍️','Healthcare':'🩺','Family':'👨‍👩‍👧','Education':'🎓','Entertainment':'🎬','Travel':'✈️','Subscriptions':'🔁','Loan EMI':'🏦','Govt & Visa Fees':'🏛️','Bank Fees':'🧾','Other':'📦',
   'Salary':'💼','Bonus':'🎉','Commission':'📈','Freelance':'💻','Rental Income':'🏘️','Dividends':'💹','Refund':'↩️','Other Income':'➕'};
 const TYPE_ICON = { transfer:'🔄', card_payment:'💳', loan_payment:'🏦', goal_contribution:'🎯', goal_withdraw:'🎯', invest_buy:'📈', invest_sell:'📉' };
 const PALETTE_OLD = ['#7C6CFF','#22D3EE','#F59E0B','#22C55E','#F43F5E','#A78BFA','#38BDF8','#FB923C','#34D399','#E879F9','#FACC15','#60A5FA','#F87171','#2DD4BF','#C084FC','#94A3B8','#FDA4AF','#86EFAC'];
@@ -1703,7 +1868,7 @@ function render() {
   $$('.bnav button').forEach(n => n.classList.toggle('on', n.dataset.p === p || (n.dataset.p === 'more' && !['dashboard','money','mess','cards'].includes(p))));
   const mp = $('#mpick');
   mp.innerHTML = MONTH_PAGES.includes(p) ? `<div class="mpick"><button data-act="mprev" aria-label="Previous month">‹</button><span title="${esc(cycleLabel(V.ym))}">${ymLabel(V.ym)}</span><button data-act="mnext" aria-label="Next month">›</button></div>` : '';
-  const L = ledger(S); const due = reminders(S, L, +S.settings.remindDays || 5).length + budgetStatus(S, cycleOf(todayISO())).rows.filter(r => r.status === 'over').length;
+  const L = ledger(S); const due = reminders(S, L, +S.settings.remindDays || 5).length + budgetStatus(S, cycleOf(todayISO())).rows.filter(r => r.status === 'over').length + docAlerts(S).length;
   const bell = $('#bell'); bell.hidden = !due; bell.textContent = due; const nc = $('#navcnt'); if (nc) { nc.hidden = !due; nc.textContent = due; }
   const sw = subWarnings(S, L, 30).filter(w => w.level !== 'info').length; const sc = $('#subcnt'); if (sc) { sc.hidden = !sw; sc.textContent = sw; }
   $('#curSel').value = curCode(); applyTheme();
@@ -1740,7 +1905,7 @@ function guilloche() {
 }
 
 /* ---------- motion helpers ---------- */
-const APP_VERSION = '2026.11.15-i';
+const APP_VERSION = '2026.11.21-a';
 function motionMode() { return (S && S.settings.motion) || 'full'; }
 function noMotion() { const m = motionMode(); return m === 'off' || (m === 'auto' && matchMedia('(prefers-reduced-motion: reduce)').matches); }
 function applyMotion() { document.documentElement.dataset.motion = motionMode(); }
@@ -1838,7 +2003,7 @@ PAGE.dashboard = L => {
     <div class="panel"><div class="ph"><h3>Savings progress</h3><span class="sp"></span><button class="btn sm ghost" data-act="go" data-p="goals">All goals</button></div>${S.goals.length ? `<div class="chart"><canvas id="c_sv"></canvas></div>` : empty('No savings goals yet.', 'addGoal', 'Create a goal')}</div>
   </div>
   <div class="grid g3">
-    <div class="panel"><div class="ph"><h3>Upcoming bills</h3><span class="sp"></span><button class="btn sm ghost" data-act="go" data-p="alerts">See all</button></div>${rem.length ? `<div class="list">${rem.map(remRow).join('')}</div>` : empty('Nothing due in the next 3 weeks.')}</div>
+    <div class="panel"><div class="ph"><h3>Upcoming bills</h3><span class="sp"></span><button class="btn sm ghost" data-act="go" data-p="alerts">See all</button></div>${docAlerts(S).slice(0, 2).map(({ d, s }) => `<div class="ins ${s.key === 'expired' ? 'bad' : 'warn'}" data-act="docOpen" data-id="${d.id}" style="cursor:pointer"><div>${(DOC_TYPES[d.type] || DOC_TYPES.other).icon} <b>${esc(docTitle(d))}</b> ${s.key === 'expired' ? 'has expired' : `expires in ${s.days} day${s.days === 1 ? '' : 's'}`}</div></div>`).join('')}${rem.length ? `<div class="list">${rem.map(remRow).join('')}</div>` : empty('Nothing due in the next 3 weeks.')}</div>
     <div class="panel"><div class="ph"><h3>Recent transactions</h3><span class="sp"></span><button class="btn sm ghost" data-act="go" data-p="money">See all</button></div>${recent.length ? `<div class="list">${recent.map(txRow).join('')}</div>` : empty('No transactions yet.', 'addTx', 'Add one')}</div>
     <div class="panel"><div class="ph"><h3>Insights</h3><span class="sp"></span><button class="btn sm ghost" data-act="go" data-p="assistant">Ask a question</button></div>${ins.length ? ins.map(insRow).join('') : empty('Add a few transactions to get insights.')}</div>
   </div>`;
@@ -2543,7 +2708,7 @@ async function exportReport(f) {
 }
 
 /* --- Assistant --- */
-const QUESTIONS = ['How much did I spend this month?','What do my subscriptions cost?','How much money can I safely save?','What are my biggest expenses?','How much debt do I have?','Can I afford a new loan?','How much should I save every month?','What is my current net worth?'];
+const QUESTIONS = ['Which documents expire soon?','How much did I spend this month?','What do my subscriptions cost?','How much money can I safely save?','What are my biggest expenses?','How much debt do I have?','Can I afford a new loan?','How much should I save every month?','What is my current net worth?'];
 let samplerP = null; const getSampler = () => samplerP ||= (window.claude?.use ? withTimeout(claude.use('sample'), 6000).catch(() => null) : Promise.resolve(null));
 PAGE.assistant = L => {
   const ins = insights(S, L, V.ym, fmt);
@@ -2566,13 +2731,170 @@ async function ask(q) {
   if (V.page === 'assistant') render();
 }
 
+/* --- Document wallet --- */
+const DOCV = { q:'', show:{} };
+const myDocs = () => (S.docs ||= []);
+const docKey = (docId, fileId) => `doc:${docId}:${fileId}`;
+const docURLs = {};
+async function docFileURL(docId, f) { const k = docKey(docId, f.id); if (docURLs[k]) return docURLs[k]; const v = await idb.get(k).catch(() => null); if (!v) return null; return docURLs[k] = URL.createObjectURL(v.blob || v); }
+async function shrinkImage(file) {
+  if (!/^image\//.test(file.type) || /gif|svg/.test(file.type)) return file;
+  try { const bmp = await createImageBitmap(file); const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height)); const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k); c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const b = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.88)); return b && b.size < file.size ? new File([b], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file; } catch (e) { return file; }
+}
+function docStatusTag(d) {
+  const s = docStatus(d);
+  if (s.key === 'none') return '<span class="tag">No expiry</span>';
+  if (s.key === 'expired') return `<span class="tag bad">Expired ${-s.days}d ago</span>`;
+  if (s.key === 'due') return `<span class="tag warn">${s.days === 0 ? 'Expires today' : `Expires in ${s.days}d`}</span>`;
+  if (s.key === 'soon') return `<span class="tag info">${s.days}d left</span>`;
+  return `<span class="tag good">Valid</span>`;
+}
+function docCard(d) {
+  const T = DOC_TYPES[d.type] || DOC_TYPES.other; const s = docStatus(d);
+  return `<button class="doccard ${s.key}" data-act="docOpen" data-id="${d.id}" style="--dc:${T.color}"><span class="dc-top"><span class="dc-ic" aria-hidden="true">${T.icon}</span>${docStatusTag(d)}</span>
+    <b>${esc(docTitle(d))}</b><span class="dc-no">${d.number ? esc(maskNo(d.number)) : '&nbsp;'}</span>
+    <span class="dc-foot">${d.expiry ? `Expires ${dshort(d.expiry)} ${d.expiry.slice(0, 4)}` : esc(T.label)}${d.files?.length ? ` · ${d.files.length} file${d.files.length > 1 ? 's' : ''}` : ''}</span></button>`;
+}
+PAGE.docs = () => {
+  const all = myDocs(); const q = DOCV.q.trim().toLowerCase();
+  const list = all.filter(d => !q || [docTitle(d), d.number, d.holder, d.issuer, d.notes, (DOC_TYPES[d.type] || {}).label].join(' ').toLowerCase().includes(q));
+  const holders = [...new Set(list.map(d => d.holder || 'Me'))].sort((a, b) => a === 'Me' ? -1 : b === 'Me' ? 1 : a.localeCompare(b));
+  const al = docAlerts(S);
+  const addBtns = `<label class="btn pri">${'+ Add document'}<input type="file" class="docin" accept="image/*,application/pdf" multiple hidden></label><button class="btn" data-act="docNew">Enter manually</button>`;
+  if (!all.length) return `<div class="panel docempty"><div class="dz-ic" aria-hidden="true">🪪</div><h3>Keep your important documents in one place</h3>
+    <p class="mut">Take a photo of your Emirates ID, passport, visa, driving licence, Mulkiya, insurance or tenancy contract. DirhamWise reads the number and expiry date for you and reminds you before anything expires.</p>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">${addBtns}</div>
+    <p class="hint" style="margin-top:14px">Saved only on this phone and protected by your app PIN. Nothing is uploaded.</p></div>`;
+  return `${al.length ? `<div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Needs attention</h3></div>${al.map(({ d, s }) => `<div class="ins ${s.key === 'expired' ? 'bad' : 'warn'}" data-act="docOpen" data-id="${d.id}" style="cursor:pointer"><div><b>${esc(docTitle(d))}${d.holder && d.holder !== 'Me' ? ` (${esc(d.holder)})` : ''}</b> ${s.key === 'expired' ? `expired on ${dlong(d.expiry)}` : `expires on ${dlong(d.expiry)}, in ${s.days} day${s.days === 1 ? '' : 's'}`}. ${esc((DOC_TYPES[d.type] || {}).tip || '')}</div></div>`).join('')}</div>` : ''}
+  <div class="toolbar" style="margin-bottom:14px"><input class="inp" id="docq" placeholder="Search documents" value="${esc(DOCV.q)}" style="max-width:280px"><span style="flex:1"></span>${addBtns}</div>
+  ${holders.map(h => `<div class="dochead"><h3>${esc(h === 'Me' ? 'My documents' : h)}</h3><span class="mut">${list.filter(d => (d.holder || 'Me') === h).length}</span></div>
+    <div class="docgrid">${list.filter(d => (d.holder || 'Me') === h).sort((a, b) => (a.expiry || '9999').localeCompare(b.expiry || '9999')).map(docCard).join('')}</div>`).join('') || empty('No documents match your search.')}
+  <div class="panel" style="margin-top:16px"><div class="ph"><h3>Backup</h3></div><p class="mut" style="margin:0 0 10px;font-size:13px">Documents are stored on this phone only and are not part of the normal backup. Save a wallet backup before changing phones.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="docExport">Save wallet backup</button><label class="btn">Restore wallet backup<input type="file" id="docimp" accept=".json,application/json" hidden></label></div></div>`;
+};
+PAGE_AFTER.docs = () => {
+  const q = $('#docq'); if (q) q.oninput = () => { DOCV.q = q.value; const pos = q.selectionStart; render(); const n = $('#docq'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } };
+  const imp = $('#docimp'); if (imp) imp.onchange = async e => { const f = e.target.files[0]; if (f) await docImport(f); };
+};
+document.addEventListener('change', e => { if (e.target?.classList?.contains('docin')) { const f = [...(e.target.files || [])]; e.target.value = ''; if (f.length) docFromFiles(f); } });
+
+/* Read a new document from photos/PDF, then open the form pre-filled */
+async function docFromFiles(files, existing = null) {
+  files = files.filter(f => /^image\/|application\/pdf/.test(f.type) || /\.(jpe?g|png|webp|heic|pdf)$/i.test(f.name));
+  if (!files.length) return toast('Choose a photo or PDF', 'warn');
+  if (files.some(f => f.size > 15e6)) return toast('Each file must be under 15 MB', 'bad');
+  const imgs = files.filter(f => /^image\//.test(f.type)); let read = { fields: [] };
+  if (imgs.length && !existing) {
+    try {
+      ocrBar('Getting the reader ready (first time only)…', 0.02);
+      tessProg = m => { if (/load/i.test(m.status)) ocrBar('Getting the reader ready (first time only)…', (m.progress || 0) * 0.3); };
+      const w = await getTess(); let text = '';
+      for (let i = 0; i < Math.min(imgs.length, 3); i++) {
+        const lbl = imgs.length > 1 ? `Reading page ${i + 1} of ${Math.min(imgs.length, 3)}…` : 'Reading your document…';
+        tessProg = m => { if (m.status === 'recognizing text') ocrBar(lbl, (i + (m.progress || 0)) / Math.min(imgs.length, 3)); };
+        const { data } = await w.recognize(await shotCanvas(imgs[i]), {}, { blocks: true, text: true }); text += '\n' + (data.text || '');
+      }
+      read = readDocText(text);
+    } catch (err) { console.error(err); toast('Could not read the text automatically. Fill in the details yourself.', 'warn', 5000); }
+    ocrBar(null);
+  }
+  const pending = []; for (const f of files) pending.push(await shrinkImage(f));
+  if (existing) return docAddFiles(existing, pending);
+  docForm(null, { type: read.type || 'other', number: read.number || '', expiry: read.expiry || '', issued: read.issued || '', issuer: read.issuer || '', notes: read.name ? 'Name: ' + read.name : '' }, pending, read);
+}
+function docForm(d, preset = {}, pending = [], read = null) {
+  const v = d ? { ...d } : { holder: 'Me', ...preset };
+  if (v.lead == null) v.lead = (DOC_TYPES[v.type] || DOC_TYPES.other).lead;
+  const holders = [...new Set(['Me', ...myDocs().map(x => x.holder).filter(Boolean)])];
+  const got = read ? read.fields.filter(k => k !== 'name') : [];
+  const lbl = { type: 'document type', number: 'number', expiry: 'expiry date', issued: 'issue date', issuer: 'issuer' };
+  const fields = [];
+  if (read) fields.push({ type: 'html', k: 'aiinfo', html: got.length ? `<div class="ins info" style="margin:0"><div><b>Filled in from your photo:</b> ${got.map(k => lbl[k]).join(', ')}. Please check before saving${read.weak ? '; the passport strip was hard to read' : ''}.</div></div>` : `<div class="ins warn" style="margin:0"><div>No details could be read from ${pending.some(f => /pdf/.test(f.type)) ? 'a PDF' : 'the photo'}. Fill them in below.</div></div>` });
+  if (pending.length) fields.push({ type: 'html', k: 'pend', label: 'Files', html: `<div class="docthumbs">${pending.map(f => /^image\//.test(f.type) ? `<img src="${URL.createObjectURL(f)}" alt="">` : `<span class="pdf">PDF</span>`).join('')}</div>` });
+  fields.push(
+    { k: 'type', label: 'Document type', type: 'select', options: Object.entries(DOC_TYPES).map(([k, t]) => [k, t.icon + ' ' + t.label]) },
+    { type: 'row', items: [{ k: 'title', label: 'Name (optional)', ph: 'e.g. Wife\'s passport, Corolla' }, { k: 'holder', label: 'Belongs to', ph: 'Me', hint: 'Me, or a family member\'s name' }] },
+    { k: 'number', label: 'Document number', ph: 'e.g. 784-1990-1234567-8' },
+    { type: 'row', items: [{ k: 'issued', label: 'Issue date', type: 'date' }, { k: 'expiry', label: 'Expiry date', type: 'date', show: o => (DOC_TYPES[o.type] || {}).expiry !== false || !!o.expiry }] },
+    { type: 'row', items: [{ k: 'lead', label: 'Remind me (days before)', type: 'number', min: 0, max: 400 }, { k: 'issuer', label: 'Issued by', ph: 'e.g. ICP, RTA, insurer' }] },
+    { k: 'notes', label: 'Notes', type: 'textarea', ph: 'Anything useful: renewal steps, policy cover, contact number' });
+  openForm({ title: d ? 'Edit document' : 'Add document', values: v, fields, submit: d ? 'Save' : 'Save document',
+    onDelete: d ? async () => { for (const f of d.files || []) await idb.del(docKey(d.id, f.id)).catch(() => {}); S.docs = myDocs().filter(x => x.id !== d.id); commit('Document deleted', 'info'); } : null,
+    onSubmit: async o => {
+      if (o.expiry && o.issued && o.expiry < o.issued) return 'Expiry date is before the issue date';
+      const rec = { ...(d || { id: uid(), files: [], created: Date.now() }), type: o.type, title: o.title.trim(), holder: o.holder.trim() || 'Me', number: o.number.trim(), issued: o.issued || '', expiry: o.expiry || '', lead: o.lead === '' ? (DOC_TYPES[o.type] || DOC_TYPES.other).lead : +o.lead, issuer: o.issuer.trim(), notes: o.notes.trim(), updated: Date.now() };
+      try { for (const f of pending) { const fid = uid(); await idb.set(docKey(rec.id, fid), { blob: f, name: f.name, type: f.type }); rec.files = [...(rec.files || []), { id: fid, name: f.name, type: f.type, size: f.size }]; } }
+      catch (e) { return 'Could not save the file on this phone. Free up some space and try again.'; }
+      if (d) S.docs[myDocs().findIndex(x => x.id === d.id)] = rec; else myDocs().push(rec);
+      commit(d ? 'Document updated' : `${docTitle(rec)} saved${rec.expiry ? `, reminder ${rec.lead} days before expiry` : ''}`);
+      if (V.page !== 'docs') go('docs');
+    } });
+  if (d || !preset.type) return;
+  // changing the type resets the reminder window to that type's default
+  const sel = $('#f_type'), lead = $('#f_lead'); if (sel && lead) sel.addEventListener('change', () => { lead.value = (DOC_TYPES[sel.value] || DOC_TYPES.other).lead; });
+}
+async function docAddFiles(d, files) {
+  try { for (const f of files) { const fid = uid(); await idb.set(docKey(d.id, fid), { blob: f, name: f.name, type: f.type }); d.files = [...(d.files || []), { id: fid, name: f.name, type: f.type, size: f.size }]; } }
+  catch (e) { return toast('Could not save the file on this phone', 'bad'); }
+  commit(`Added ${files.length} file${files.length > 1 ? 's' : ''}`); docOpen(d.id);
+}
+async function docOpen(id) {
+  const d = myDocs().find(x => x.id === id); if (!d) return;
+  const T = DOC_TYPES[d.type] || DOC_TYPES.other; const s = docStatus(d); const shown = DOCV.show[id];
+  const row = (k, v) => v ? `<div class="dline"><span>${k}</span><b>${v}</b></div>` : '';
+  const sc = modal(docTitle(d), `<div class="docsheet" style="--dc:${T.color}">
+    <div class="docfiles" id="docfiles">${(d.files || []).map(f => `<button class="dfile" data-fid="${f.id}" aria-label="Open ${esc(f.name)}">${/^image\//.test(f.type) ? '<span class="ld"></span>' : '<span class="pdf">PDF</span>'}</button>`).join('')}
+      <label class="dfile add" aria-label="Add page or file">+<input type="file" id="docmore" accept="image/*,application/pdf" multiple hidden></label></div>
+    <div class="dhead"><span class="dc-ic">${T.icon}</span><div><b>${esc(T.label)}</b><div class="mut" style="font-size:12px">${esc(d.holder && d.holder !== 'Me' ? d.holder : 'Mine')}</div></div><span class="sp"></span>${docStatusTag(d)}</div>
+    ${d.number ? `<div class="dline"><span>Number</span><b class="dnum">${esc(shown ? d.number : maskNo(d.number))}</b><button class="btn sm ghost" id="dshow">${shown ? 'Hide' : 'Show'}</button><button class="btn sm ghost" id="dcopy">Copy</button></div>` : ''}
+    ${row('Issued', d.issued ? dlong(d.issued) : '')}${row('Expires', d.expiry ? `${dlong(d.expiry)}${s.days != null ? ` (${s.days < 0 ? -s.days + ' days ago' : s.days + ' days left'})` : ''}` : '')}
+    ${row('Reminder', d.expiry ? `${d.lead ?? T.lead} days before` : '')}${row('Issued by', esc(d.issuer || ''))}
+    ${d.notes ? `<div class="dnotes">${esc(d.notes)}</div>` : ''}
+    ${T.tip && (s.key === 'expired' || s.key === 'due' || s.key === 'soon') ? `<div class="ins info"><div><b>Renewing:</b> ${esc(T.tip)}</div></div>` : ''}</div>`,
+    { wide: true, foot: `<button class="btn" id="dedit">Edit</button>${T.fee ? '<button class="btn" id="dfee">Record renewal fee</button>' : ''}<span class="sp"></span>${d.files?.length ? '<button class="btn pri" id="dshare">Share</button>' : ''}` });
+  for (const el of $$('.dfile[data-fid]', sc)) { const f = d.files.find(x => x.id === el.dataset.fid); const url = await docFileURL(d.id, f);
+    if (!url) { el.innerHTML = '<span class="pdf" title="This file is not on this phone">—</span>'; continue; }
+    if (/^image\//.test(f.type)) el.innerHTML = `<img src="${url}" alt="">`;
+    el.onclick = () => docView(d, f, url); }
+  $('#dedit', sc).onclick = () => docForm(d);
+  const fee = $('#dfee', sc); if (fee) fee.onclick = () => { closeModal(); setTimeout(() => txForm('expense', null, { category: EXP_CATS.includes(T.fee) ? T.fee : 'Other', payee: docTitle(d) + ' renewal' }), 240); };
+  const sh = $('#dshow', sc); if (sh) sh.onclick = () => { DOCV.show[id] = !shown; docOpen(id); };
+  const cp = $('#dcopy', sc); if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText(d.number); toast('Number copied'); } catch (e) { toast('Copy was blocked; tap Show and copy it by hand', 'warn'); } };
+  const more = $('#docmore', sc); if (more) more.onchange = async e => { const f = [...e.target.files]; if (f.length) { closeModal(); await docFromFiles(f, d); } };
+  const shb = $('#dshare', sc); if (shb) shb.onclick = () => docShare(d);
+}
+function docView(d, f, url) {
+  const sc = document.createElement('div'); sc.className = 'docview'; sc.innerHTML = `${/^image\//.test(f.type) ? `<img src="${url}" alt="${esc(f.name)}">` : `<iframe src="${url}" title="${esc(f.name)}"></iframe>`}<button class="icon-btn" aria-label="Close">${ico('x')}</button>`;
+  sc.onclick = e => { if (e.target === sc || e.target.closest('button')) sc.remove(); }; document.body.appendChild(sc);
+}
+async function docShare(d) {
+  const files = []; for (const f of d.files || []) { const v = await idb.get(docKey(d.id, f.id)).catch(() => null); if (v) files.push(new File([v.blob || v], `${docTitle(d).replace(/[^\w ]+/g, '').trim()}-${files.length + 1}.${(f.name.split('.').pop() || 'jpg')}`, { type: f.type })); }
+  if (!files.length) return toast('No files saved on this phone for this document', 'warn');
+  if (navigator.canShare?.({ files })) { try { await navigator.share({ files, title: docTitle(d) }); return; } catch (e) { if (e?.name === 'AbortError') return; } }
+  for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000); }
+  toast(`Downloaded ${files.length} file${files.length > 1 ? 's' : ''}`);
+}
+async function docExport() {
+  const out = { kind: 'dirhamwise-wallet', v: 1, saved: new Date().toISOString(), docs: [] };
+  const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+  for (const d of myDocs()) { const files = []; for (const f of d.files || []) { const v = await idb.get(docKey(d.id, f.id)).catch(() => null); if (v) files.push({ ...f, data: await b64(v.blob || v) }); } out.docs.push({ ...d, files }); }
+  await offerDownload(`DirhamWise-wallet-${todayISO()}.json`, JSON.stringify(out));
+}
+async function docImport(file) {
+  try { const o = JSON.parse(await file.text()); if (o.kind !== 'dirhamwise-wallet') throw new Error('not a wallet');
+    let n = 0; for (const d of o.docs || []) { const files = []; for (const f of d.files || []) { const { data, ...meta } = f; if (data) { const blob = await (await fetch(data)).blob(); await idb.set(docKey(d.id, f.id), { blob, name: f.name, type: f.type }); } files.push(meta); }
+      const rec = { ...d, files }; const i = myDocs().findIndex(x => x.id === d.id); if (i >= 0) S.docs[i] = rec; else S.docs.push(rec); n++; }
+    commit(`Restored ${n} document${n === 1 ? '' : 's'}`); } catch (e) { toast('That is not a DirhamWise wallet backup', 'bad'); }
+}
+
 /* --- Reminders --- */
 PAGE.alerts = L => {
   const rem = reminders(S, L, 45); const soon = rem.filter(r => r.daysLeft <= (+S.settings.remindDays || 5)); const later = rem.filter(r => r.daysLeft > (+S.settings.remindDays || 5));
   const B = budgetStatus(S, cycleOf(todayISO())); const bAlerts = B.rows.filter(r => r.status !== 'ok'); const isl = S.settings.islamicEvents ? islamicEvents(todayISO(), 400).slice(0, 5) : [];
   return `<div class="grid g3"><div class="panel span2"><div class="ph"><h3>Due within ${S.settings.remindDays || 5} days</h3><span class="sp"></span><small>${dlong(todayISO())}${S.settings.hijri ? ', ' + esc(hijri(todayISO())) : ''}</small></div>${soon.length ? `<div class="list">${soon.map(remRow).join('')}</div>` : empty('Nothing due soon. 🎉')}
     <div class="ph" style="margin-top:20px"><h3>Coming up (next 45 days)</h3></div>${later.length ? `<div class="list">${later.map(remRow).join('')}</div>` : empty('Nothing else scheduled.')}</div>
-  <div><div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Budget alerts</h3></div>${bAlerts.length ? bAlerts.map(r => `<div class="ins ${r.status === 'over' ? 'bad' : 'warn'}"><div><b>${esc(r.cat)}</b>: ${fmt(r.spent)} of ${fmt(r.effective)} (${pct(r.pct,0)})</div></div>`).join('') : '<div class="mut">All budgets are below 80%.</div>'}</div>
+  <div>${(S.docs || []).some(d => d.expiry) ? `<div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Documents</h3><span class="sp"></span><button class="btn sm ghost" data-act="go" data-p="docs">Open wallet</button></div>${(S.docs || []).filter(d => d.expiry && docStatus(d).days <= 120).sort((a, b) => a.expiry.localeCompare(b.expiry)).map(d => `<div class="row" data-act="docOpen" data-id="${d.id}" style="cursor:pointer"><span class="dc-ic sm">${(DOC_TYPES[d.type] || DOC_TYPES.other).icon}</span><div class="t"><b>${esc(docTitle(d))}</b><small>Expires ${dlong(d.expiry)}</small></div>${docStatusTag(d)}</div>`).join('') || '<div class="mut" style="font-size:13px">Nothing expires in the next 4 months.</div>'}</div>` : ''}<div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Budget alerts</h3></div>${bAlerts.length ? bAlerts.map(r => `<div class="ins ${r.status === 'over' ? 'bad' : 'warn'}"><div><b>${esc(r.cat)}</b>: ${fmt(r.spent)} of ${fmt(r.effective)} (${pct(r.pct,0)})</div></div>`).join('') : '<div class="mut">All budgets are below 80%.</div>'}</div>
   <div class="panel" style="margin-bottom:16px"><div class="ph"><h3>Bills & subscriptions</h3><span class="sp"></span><button class="btn sm pri" data-act="addBill">+ Bill</button></div>${S.bills.length ? `<div class="list">${S.bills.map(b => `<div class="row" data-act="editBill" data-id="${b.id}" style="cursor:pointer">${mono(b.name, catColor(b.category))}<div class="t"><b>${esc(b.name)}</b><small>${b.freq}, next ${dshort(billNextDue(b))}${b.active === false ? ', paused' : ''}</small></div><div class="amt">${fmt(b.amount)}</div></div>`).join('')}</div>` : empty('Add rent, DEWA/ADDC, internet, Salik top-ups and subscriptions to get reminders.')}<div class="hint" style="margin-top:8px">Card due dates, loan EMIs and goal contributions are added automatically.</div></div>
   ${isl.length ? `<div class="panel"><div class="ph"><h3>Islamic calendar</h3></div>${isl.map(e => `<div class="row"><div class="t"><b>${esc(e.title)}</b><small>${dlong(e.date)}, ${esc(hijri(e.date))}</small></div><span class="tag">in ${e.daysLeft}d</span></div>`).join('')}<div class="hint" style="margin-top:8px">Umm al-Qura dates; actual dates depend on moon sighting. Plan Ramadan and Eid budgets ahead.</div></div>` : ''}</div></div>`;
 };
@@ -2711,6 +3033,7 @@ const ACT = {
   install: () => installHelp(),
   go: d => go(d.p), closeModal, mprev: () => { V.ym = ymAdd(V.ym, -1); render(); }, mnext: () => { V.ym = ymAdd(V.ym, 1); render(); },
   theme: () => { const cur = document.documentElement.dataset.theme; S.settings.theme = cur === 'dark' ? 'light' : 'dark'; commit(); },
+  docOpen: d => docOpen(d.id), docNew: () => docForm(null), docExport: () => docExport(),
   more: () => { const sc = modal('More', `<div class="list">${PAGES.filter(p => !['dashboard','money','mess','cards'].includes(p[0])).map(([k, l]) => `<button class="nav" data-act="go" data-p="${k}" style="padding:13px 10px">${ico(k)}<span>${l}</span></button>`).join('')}</div>`); sc.addEventListener('click', e => { if (e.target.closest('[data-act=go]')) closeModal(); }); },
   addTx: d => (V.page === 'mess' && MX.data && !d.type) ? messExpenseForm() : txForm(d.type || 'expense', null, d.cat ? { category: d.cat } : {}),
   editTx: d => { const t = S.tx.find(x => x.id === d.id); if (!t) return; if (t.type.startsWith('invest')) tradeForm(null, null, t); else txForm(t.type, t); },
@@ -2746,6 +3069,7 @@ function startApp(msg) {
   handleIncomingSMS();
   const jc = sessionStorage.getItem('dw_join'); if (jc) { sessionStorage.removeItem('dw_join'); go('mess'); setTimeout(() => { if (MX.ready && MX.data && MX.data.group.code === jc) return; messJoinForm(jc); }, 600); }
   if (created) toast(`${created} recurring transaction${created > 1 ? 's' : ''} added for this period`, 'info');
+  const dA = viaSMS ? [] : docAlerts(S); if (dA.length) setTimeout(() => toast(`${docTitle(dA[0].d)} ${dA[0].s.key === 'expired' ? 'has expired' : `expires in ${dA[0].s.days} days`}${dA.length > 1 ? ` (+${dA.length - 1} more document${dA.length > 2 ? 's' : ''})` : ''}`, 'warn', 6000, { label:'View', fn: () => go('docs') }), 1400);
   const due = viaSMS ? [] : reminders(S, ledger(S), +S.settings.remindDays || 5); if (due.length) setTimeout(() => toast(`${due.length} payment${due.length > 1 ? 's' : ''} due soon: ${due.slice(0,3).map(r => r.title).join(', ')}${due.length > 3 ? '…' : ''}`, 'warn', 6000), 800);
 }
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (S && $('#view') && PAGES.some(p => p[0] === h) && h !== V.page) { V.page = h; render(); } });
